@@ -506,7 +506,16 @@ class PoolEngine {
     _emit();
   }
 
-  bool _isPriority(Candidate c) => priority.any((p) => c.remark.toLowerCase().contains(p));
+  // Remark matching ignores case, spaces, dashes and underscores, so
+  // "TR GAMING", "TR-GAMING" and "TRGAMING" all count as the same
+  // priority server (panels write the name slightly differently).
+  static String _normRemark(String r) => r.toLowerCase().replaceAll(RegExp(r'[\s\-_]+'), '');
+  bool _isPriorityRemark(String remark) {
+    final n = _normRemark(remark);
+    return priority.any((p) => n.contains(_normRemark(p)));
+  }
+
+  bool _isPriority(Candidate c) => _isPriorityRemark(c.remark);
 
   /// Order: configured priority servers first, then the best-ping ones (spread a little
   /// between near-equals), then every remaining config, so nothing is skipped.
@@ -812,7 +821,33 @@ class PoolEngine {
     final out = <Candidate>[];
     const none = SubInfo(url: '', known: false);
     Iterable<String> variants(String l) => {transform(l), if (keepOriginal) l};
-    for (final l in ([...directLinks]..shuffle(_rng)).where(linkFilter).take(60)) {
+    // Priority servers (e.g. TR GAMING) must always be in the sample:
+    // with a big provider the shuffled take(60) below could otherwise
+    // leave them out entirely, and the priority pick in _next() can
+    // only choose among sampled configs. So partition first: every
+    // priority link is sampled, the rest fill the remaining slots.
+    final filtered = [...directLinks].where(linkFilter).toList();
+    bool isPri(String l) {
+      for (final tl in variants(l)) {
+        final p = core.parse(tl);
+        if (p != null && _isPriorityRemark(p.remark)) return true;
+      }
+      return false;
+    }
+
+    final priLinks = <String>[];
+    final restLinks = <String>[];
+    for (final l in filtered) {
+      if (isPri(l)) {
+        priLinks.add(l);
+      } else {
+        restLinks.add(l);
+      }
+    }
+    restLinks.shuffle(_rng);
+    final keep = 60 - priLinks.length;
+    final sampled = [...priLinks, ...restLinks.take(keep > 0 ? keep : 0)];
+    for (final l in sampled) {
       for (final tl in variants(l)) {
         final p = core.parse(tl);
         if (p != null) out.add(Candidate(tl, p.remark, p.config, none));
