@@ -170,31 +170,81 @@ ProviderDef? _providerFromObject(dynamic item) {
 ///   1. A JSON object: {"id": "...", "name": "...", "enabled": true,
 ///      "hours": 6, "sources": ["https://...", ...]}
 ///   2. A JSON array holding exactly one such object.
-///   3. Plain text: subscription URLs, one per line (the shape a user
-///      naturally pastes when they "put the sub link" in the secret).
-///      The provider id/name then come from the secret itself: the
-///      define for that provider maps to that provider id with its
-///      usual display name.
+///   3. A JSON array of URL strings: ["https://...", "https://..."]
+///      (the shape a user naturally pastes for a provider with
+///      several subs).
+///   4. Plain text: subscription URLs separated by whitespace and/or
+///      commas, optionally wrapped in brackets, quotes or angle
+///      brackets (the shape a user naturally pastes when they "put
+///      the sub link" in the secret). The provider id/name then come
+///      from the secret itself: the define for that provider maps to
+///      that provider id with its usual display name.
+///   5. One extra base64 layer around any of the above (a value the
+///      user encoded by hand on top of the workflow's encoding).
 /// Anything else yields null and the provider is left as-is, so a bad
 /// single secret never wipes out the other providers.
 ProviderDef? _parseSingleProviderSecret(String raw, String fallbackId, String fallbackName) {
-  final text = raw.trim();
+  return _parseSingleProviderSecretDepth(raw, fallbackId, fallbackName, 0);
+}
+
+ProviderDef? _parseSingleProviderSecretDepth(String raw, String fallbackId, String fallbackName, int depth) {
+  var text = raw.trim();
+  if (text.startsWith('\uFEFF')) text = text.substring(1).trim();
   if (text.isEmpty) return null;
   try {
     final decoded = jsonDecode(text);
     if (decoded is Map) return _providerFromObject(decoded);
-    if (decoded is List && decoded.length == 1) return _providerFromObject(decoded.first);
+    if (decoded is List) {
+      if (decoded.length == 1 && decoded.first is Map) return _providerFromObject(decoded.first);
+      // Array of URL strings: every element must be a string, and
+      // every string must be a URL; anything else stays rejected.
+      if (decoded.isNotEmpty && decoded.every((e) => e is String)) {
+        final sources = <ProviderSource>[];
+        for (final s in decoded.cast<String>()) {
+          final u = _stripLinkWrapping(s);
+          if (u.startsWith('http://') || u.startsWith('https://')) sources.add(_src(u));
+        }
+        if (sources.length == decoded.length) return ProviderDef(fallbackId, fallbackName, true, 6, sources);
+      }
+    }
   } catch (_) {
     // Not JSON: fall through to the plain-URL shape below.
   }
   final sources = <ProviderSource>[];
-  for (final part in text.split(RegExp(r'\s+'))) {
-    var s = part.trim();
-    if (s.startsWith('"') && s.endsWith('"') && s.length >= 2) s = s.substring(1, s.length - 1);
-    if (s.startsWith('http://') || s.startsWith('https://')) sources.add(_src(s));
+  for (final part in text.split(RegExp(r'[\s,]+'))) {
+    final u = _stripLinkWrapping(part);
+    if (u.startsWith('http://') || u.startsWith('https://')) sources.add(_src(u));
   }
-  if (sources.isEmpty) return null;
-  return ProviderDef(fallbackId, fallbackName, true, 6, sources);
+  if (sources.isNotEmpty) return ProviderDef(fallbackId, fallbackName, true, 6, sources);
+  // Last resort: the value itself may be base64 (double-encoded by
+  // hand on top of the workflow's encoding). Try one decode and
+  // re-parse; never recurse deeper.
+  if (depth == 0) {
+    try {
+      final compact = text.replaceAll(RegExp(r'\s+'), '');
+      final padded = compact + '=' * ((4 - compact.length % 4) % 4);
+      final decodedText = utf8.decode(base64Decode(padded));
+      if (decodedText.contains('http')) {
+        return _parseSingleProviderSecretDepth(decodedText, fallbackId, fallbackName, 1);
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
+/// Strips wrapping punctuation users often paste around a link
+/// (brackets, quotes, angle brackets, parens) without touching the
+/// URL itself: subscription URLs never start or end with these.
+String _stripLinkWrapping(String s) {
+  const wraps = ['[', ']', '(', ')', '"', "'", '<', '>'];
+  var out = s.trim();
+  while (out.isNotEmpty && wraps.contains(out[0])) {
+    out = out.substring(1);
+  }
+  while (out.isNotEmpty && wraps.contains(out[out.length - 1])) {
+    out = out.substring(0, out.length - 1);
+  }
+  return out;
 }
 
 /// One status line per per-provider secret, for the app's Logs screen.
