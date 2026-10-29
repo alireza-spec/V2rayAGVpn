@@ -5,9 +5,9 @@
 [![Build APK](https://github.com/alireza-spec/V2rayAGVpn/actions/workflows/build-apk/badge.svg)](https://github.com/alireza-spec/V2rayAGVpn/actions/workflows/build-apk)
 [![Latest release](https://img.shields.io/github/v/release/alireza-spec/V2rayAGVpn)](https://github.com/alireza-spec/V2rayAGVpn/releases/latest)
 
-اپ اندرویدی V2rayAG؛ ساخته‌شده با Flutter. این ریپو ادامه‌ی مستقیم نسخه‌ی قبلی است و
-**هیچ قابلیتی نسبت به آن کم نشده است** — فقط ساختار پروژه از حالت تک‌فایل بیلد به یک
-پروژه‌ی واقعی Flutter با فایل و فولدر تبدیل شده است.
+اپ اندرویدی V2rayAG؛ ساخته‌شده با Flutter. این نسخه‌ی **v1.0.0**، اولین نسخه‌ی رسمی
+است و **هیچ قابلیتی در آن کم نشده است** — ساختار پروژه هم یک پروژه‌ی واقعی Flutter
+با فایل و فولدر است، نه تک‌فایل بیلد.
 
 > پکیج اپ همان `com.v2rayag.v2rayag` است، پس نسخه‌ی جدید روی نصب قبلی هم به‌روزرسانی می‌شود.
 
@@ -107,5 +107,7 @@ flutter build apk --release --split-per-abi
 ## بیلد و ریلیز خودکار
 
 هر پوش به شاخه‌ی `main` (یا اجرای دستی از تب Actions) ورک‌فلوی **build-apk** را اجرا می‌کند:
-تست‌ها، بیلد سه APK، و انتشار ریلیز با تگ `build-N` (فقط فایل‌های `.apk`، بدون zip).
-شماره‌ی بیلد داخل اپ هم از همین شماره‌ی اجرای ورک‌فلو می‌آید.
+تست‌ها، بیلد سه APK، و انتشار ریلیز با تگ نسخه‌ی `pubspec.yaml` (مثلاً `v1.0.0`)
+به‌عنوان Latest (فقط فایل‌های `.apk`، بدون zip). برای نسخه‌ی بعدی کافی است همان یک خط
+`version` در `pubspec.yaml` عوض شود. عدد بیلد داخل اپ هم از روی همان نسخه ساخته
+می‌شود (v1.0.0 → 100) تا بررسی آپدیت درست کار کند.
