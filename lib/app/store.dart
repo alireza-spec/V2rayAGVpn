@@ -1038,19 +1038,23 @@ class Store extends ChangeNotifier {
     save();
   }
 
-  // Refresh policy (v34, user-set; Fast rule tightened in v48): a
-  // connect tap NEVER refreshes. Automatic refresh happens only at app
-  // start (first use, and again once the interval has elapsed: every
-  // other provider once per 12 hours, per source). Fast is different:
-  // it auto-refreshes ONLY on the very first run, while it has no
-  // cached configs at all. Afterwards it NEVER auto-refreshes, not
-  // even once a day: its host rate-limits updates and drops configs
-  // past a count. A manual tap (per provider, Update selected,
-  // Update all) always forces a refresh.
+  // Refresh policy (v34, user-set; Fast rule tightened in v48 and
+  // v1.0.3): a connect tap NEVER refreshes. Automatic refresh happens
+  // only at app start (first use, and again once the interval has
+  // elapsed: every other provider once per 12 hours, per source).
+  // Fast is different: it auto-refreshes exactly ONCE, on the first
+  // run after install, and NEVER again automatically — even if that
+  // first fetch failed and it still has zero configs, because
+  // retrying on every startup is what hammers its host's daily limit
+  // (the old "has configs" check retried forever while the count was
+  // zero). The timestamp below is written on every Fast refresh, so
+  // a single attempt, manual or automatic, already seals it. A manual
+  // tap (per provider, Update selected, Update all) always forces a
+  // refresh.
   bool _fresh(ProviderDef p) {
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     if (p.id == 'fast') {
-      return providerConfigCount('fast') > 0;
+      return providerLastRefresh.containsKey('fast');
     }
     for (final src in p.sources) {
       final c = srcCache[src.url];
