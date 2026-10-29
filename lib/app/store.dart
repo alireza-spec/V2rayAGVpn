@@ -469,6 +469,12 @@ class Store extends ChangeNotifier {
         providerDefaultsVersion = 2;
         migrated = true;
       }
+      // One line per per-provider secret (names and counts only, never
+      // values), so a silently ignored secret is visible in Logs instead
+      // of showing up as a mysteriously missing provider.
+      for (final line in providerSecretDiagnostics()) {
+        log(line);
+      }
       providerLastRefresh = Map<String, int>.from(j['providerLastRefresh'] ?? {});
       srcCache = (j['srcCache'] as Map<String, dynamic>? ?? {}).map((k, v) => MapEntry(k, Map<String, dynamic>.from(v)));
       providersExpanded = j['providersExpanded'] == true;
