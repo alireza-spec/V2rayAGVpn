@@ -1,0 +1,118 @@
+name: build-apk
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Run tests
+        run: flutter test
+        continue-on-error: true
+      - name: Build APK
+        env:
+          POOL_LIST: ${{ secrets.POOL_LIST }}
+          POOL_URL: ${{ secrets.POOL_URL }}
+          PROVIDERS_JSON: ${{ secrets.PROVIDERS_JSON }}
+          PROVIDER_FAST: ${{ secrets.PROVIDER_FAST }}
+          PROVIDER_UPDATE: ${{ secrets.PROVIDER_UPDATE }}
+          PROVIDER_V2RAYAG: ${{ secrets.PROVIDER_V2RAYAG }}
+          PROVIDER_ANTIFILTER: ${{ secrets.PROVIDER_ANTIFILTER }}
+          PROVIDER_HIDDIFY: ${{ secrets.PROVIDER_HIDDIFY }}
+          PROVIDER_UNLIMITED: ${{ secrets.PROVIDER_UNLIMITED }}
+          PSIPHON_JSON: ${{ secrets.PSIPHON_JSON }}
+          UNLIMITED_CONFIGS: ${{ secrets.UNLIMITED_CONFIGS }}
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/^version: *//; s/+.*//')
+          NUM=$(echo "$VERSION" | tr -d '.')
+          LIST=$(printf '%s' "$POOL_LIST" | tr '\r\n' ',,' | sed 's/,,*/,/g;s/^,//;s/,$//')
+          PROV_B64=$(printf '%s' "$PROVIDERS_JSON" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDERS_JSON" | base64)
+          FAST_B64=$(printf '%s' "$PROVIDER_FAST" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_FAST" | base64)
+          UPD_B64=$(printf '%s' "$PROVIDER_UPDATE" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_UPDATE" | base64)
+          V2_B64=$(printf '%s' "$PROVIDER_V2RAYAG" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_V2RAYAG" | base64)
+          AF_B64=$(printf '%s' "$PROVIDER_ANTIFILTER" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_ANTIFILTER" | base64)
+          HID_B64=$(printf '%s' "$PROVIDER_HIDDIFY" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_HIDDIFY" | base64)
+          UNLPROV_B64=$(printf '%s' "$PROVIDER_UNLIMITED" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_UNLIMITED" | base64)
+          PSI_B64=$(printf '%s' "$PSIPHON_JSON" | base64 -w0 2>/dev/null || printf '%s' "$PSIPHON_JSON" | base64)
+          UNL_B64=$(printf '%s' "$UNLIMITED_CONFIGS" | base64 -w0 2>/dev/null || printf '%s' "$UNLIMITED_CONFIGS" | base64)
+          flutter build apk --release --split-per-abi --dart-define=POOL_LIST="$LIST" --dart-define=POOL_URL="$POOL_URL" --dart-define=PROVIDERS_B64="$PROV_B64" --dart-define=PROVIDER_FAST_B64="$FAST_B64" --dart-define=PROVIDER_UPDATE_B64="$UPD_B64" --dart-define=PROVIDER_V2RAYAG_B64="$V2_B64" --dart-define=PROVIDER_ANTIFILTER_B64="$AF_B64" --dart-define=PROVIDER_HIDDIFY_B64="$HID_B64" --dart-define=PROVIDER_UNLIMITED_B64="$UNLPROV_B64" --dart-define=PSIPHON_B64="$PSI_B64" --dart-define=UNLIMITED_B64="$UNL_B64" --dart-define=BUILD_NUM="$NUM"
+      - name: Collect APKs by architecture
+        run: |
+          mkdir -p dist
+          D=build/app/outputs/flutter-apk
+          cp "$D/app-arm64-v8a-release.apk" dist/V2rayAG-arm64-v8a.apk || true
+          cp "$D/app-armeabi-v7a-release.apk" dist/V2rayAG-armeabi-v7a.apk || true
+      - name: Build universal APK
+        continue-on-error: true
+        env:
+          POOL_LIST: ${{ secrets.POOL_LIST }}
+          POOL_URL: ${{ secrets.POOL_URL }}
+          PROVIDERS_JSON: ${{ secrets.PROVIDERS_JSON }}
+          PROVIDER_FAST: ${{ secrets.PROVIDER_FAST }}
+          PROVIDER_UPDATE: ${{ secrets.PROVIDER_UPDATE }}
+          PROVIDER_V2RAYAG: ${{ secrets.PROVIDER_V2RAYAG }}
+          PROVIDER_ANTIFILTER: ${{ secrets.PROVIDER_ANTIFILTER }}
+          PROVIDER_HIDDIFY: ${{ secrets.PROVIDER_HIDDIFY }}
+          PROVIDER_UNLIMITED: ${{ secrets.PROVIDER_UNLIMITED }}
+          PSIPHON_JSON: ${{ secrets.PSIPHON_JSON }}
+          UNLIMITED_CONFIGS: ${{ secrets.UNLIMITED_CONFIGS }}
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/^version: *//; s/+.*//')
+          NUM=$(echo "$VERSION" | tr -d '.')
+          LIST=$(printf '%s' "$POOL_LIST" | tr '\r\n' ',,' | sed 's/,,*/,/g;s/^,//;s/,$//')
+          PROV_B64=$(printf '%s' "$PROVIDERS_JSON" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDERS_JSON" | base64)
+          FAST_B64=$(printf '%s' "$PROVIDER_FAST" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_FAST" | base64)
+          UPD_B64=$(printf '%s' "$PROVIDER_UPDATE" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_UPDATE" | base64)
+          V2_B64=$(printf '%s' "$PROVIDER_V2RAYAG" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_V2RAYAG" | base64)
+          AF_B64=$(printf '%s' "$PROVIDER_ANTIFILTER" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_ANTIFILTER" | base64)
+          HID_B64=$(printf '%s' "$PROVIDER_HIDDIFY" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_HIDDIFY" | base64)
+          UNLPROV_B64=$(printf '%s' "$PROVIDER_UNLIMITED" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_UNLIMITED" | base64)
+          PSI_B64=$(printf '%s' "$PSIPHON_JSON" | base64 -w0 2>/dev/null || printf '%s' "$PSIPHON_JSON" | base64)
+          UNL_B64=$(printf '%s' "$UNLIMITED_CONFIGS" | base64 -w0 2>/dev/null || printf '%s' "$UNLIMITED_CONFIGS" | base64)
+          flutter build apk --release --dart-define=POOL_LIST="$LIST" --dart-define=POOL_URL="$POOL_URL" --dart-define=PROVIDERS_B64="$PROV_B64" --dart-define=PROVIDER_FAST_B64="$FAST_B64" --dart-define=PROVIDER_UPDATE_B64="$UPD_B64" --dart-define=PROVIDER_V2RAYAG_B64="$V2_B64" --dart-define=PROVIDER_ANTIFILTER_B64="$AF_B64" --dart-define=PROVIDER_HIDDIFY_B64="$HID_B64" --dart-define=PROVIDER_UNLIMITED_B64="$UNLPROV_B64" --dart-define=PSIPHON_B64="$PSI_B64" --dart-define=UNLIMITED_B64="$UNL_B64" --dart-define=BUILD_NUM="$NUM"
+          cp build/app/outputs/flutter-apk/app-release.apk dist/V2rayAG-universal.apk
+      - name: List files
+        run: ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: V2rayAG-arm64-v8a
+          path: dist/V2rayAG-arm64-v8a.apk
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: V2rayAG-armeabi-v7a
+          path: dist/V2rayAG-armeabi-v7a.apk
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: V2rayAG-universal
+          path: dist/V2rayAG-universal.apk
+          if-no-files-found: ignore
+      - name: Publish release (plain .apk downloads, no zip)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/^version: *//; s/+.*//')
+          gh release create "v$VERSION" dist/*.apk \
+            --title "V2rayAG v$VERSION" \
+            --latest \
+            --notes "V2rayAG v$VERSION - first official release.
+
+          arm64-v8a: most phones made after 2017. armeabi-v7a: older 32-bit phones. universal: works on all phones, larger file."
