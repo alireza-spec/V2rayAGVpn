@@ -103,6 +103,14 @@ class PsiphonEngine {
   // v48: a verification already in flight (duplicate 'connected'
   // events must not run a second one concurrently and reset the timer).
   bool _verifying = false;
+  // v1.0.3: one automatic re-dial for a first attempt that failed
+  // before ever connecting. Psiphon server selection is per-dial, so
+  // a fresh dial often succeeds where the first one failed — the user
+  // currently has to tap connect a second time by hand for the same
+  // effect. Exactly one retry per user connect, never after a manual
+  // disconnect, never once this attempt has connected.
+  bool _autoRetryUsed = false;
+  bool _connectedOnce = false;
   // v48: when a connected tunnel starts re-dialing (see 'connecting'
   // below), the moment the re-dial began. After 60s without
   // re-establishing, the session honestly drops to connecting.
@@ -111,6 +119,7 @@ class PsiphonEngine {
   PsiphonState get state => _s;
   void _set(PsiphonState s) {
     _s = s;
+    if (s.phase == PsiphonPhase.connected) _connectedOnce = true;
     _ctrl.add(s);
   }
 
@@ -201,8 +210,30 @@ class PsiphonEngine {
     }
   }
 
+  /// One automatic re-dial for a failed first attempt. Returns true
+  /// when a retry was started (the caller must not also report
+  /// failed); false when no retry applies, in which case the caller
+  /// reports the failure itself. Never sets a failure state itself.
+  Future<bool> _autoRetry() async {
+    if (_autoRetryUsed || _connectedOnce) return false;
+    _autoRetryUsed = true;
+    _wanted = true;
+    log('Psiphon: first dial failed, retrying once automatically');
+    _set(const PsiphonState(phase: PsiphonPhase.connecting, message: 'Retrying'));
+    try {
+      await _m.invokeMethod('start');
+      return true;
+    } catch (e) {
+      _wanted = false;
+      log('Psiphon retry start failed: $e');
+      return false;
+    }
+  }
+
   Future<void> connect() async {
     if (_wanted) return;
+    _autoRetryUsed = false;
+    _connectedOnce = false;
     init();
     if (!await isConfigured()) {
       log('Psiphon: bridge reports not configured');
@@ -289,10 +320,22 @@ class PsiphonEngine {
         }
         break;
       case 'failed':
+        final wasWanted = _wanted;
         _wanted = false;
         _redialAt = null;
         log('Psiphon failed: ${j['error']}');
-        _set(PsiphonState(phase: PsiphonPhase.failed, message: '${j['error'] ?? 'Connection failed'}'));
+        if (!wasWanted) {
+          // Late failure after a manual disconnect: never revive it.
+          _set(PsiphonState(phase: PsiphonPhase.failed, message: '${j['error'] ?? 'Connection failed'}'));
+          break;
+        }
+        // Fire-and-forget by design: _onEvent is synchronous, and
+        // _autoRetry reports nothing itself when it does not retry.
+        _autoRetry().then((retried) {
+          if (!retried) {
+            _set(PsiphonState(phase: PsiphonPhase.failed, message: '${j['error'] ?? 'Connection failed'}'));
+          }
+        });
         break;
       case 'stopped':
         _tick?.cancel();
@@ -384,6 +427,7 @@ class PsiphonEngine {
       // failure: never report failed over it.
       if (!_wanted) return;
       log('Psiphon: tunnel-core connected but no traffic passed through its local proxy');
+      if (await _autoRetry()) return;
       _set(const PsiphonState(phase: PsiphonPhase.failed, message: 'Psiphon reported connected, but no traffic passed through the tunnel'));
       _wanted = false;
     } finally {
