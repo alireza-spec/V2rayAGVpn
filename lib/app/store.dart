@@ -1014,14 +1014,14 @@ class Store extends ChangeNotifier {
   ProviderDef providerById(String id) => kProviders.firstWhere((p) => p.id == id);
 
   void toggleProvider(String id) {
+    // User rule (v1.0.4): ticking or unticking a provider NEVER
+    // refreshes it. Refresh happens only on first app open, after the
+    // 12h interval, or on a manual tap (row arrow, Update selected,
+    // Update all). The old forced refresh on enable is what made
+    // re-ticking a provider start an update.
     final on = !(providerEnabled[id] ?? false);
     providerEnabled[id] = on;
     save();
-    if (on) {
-      // Enabling a provider must not leave it at 0 configs: refresh it
-      // right away (forced, ignoring the freshness interval).
-      refreshProvider(providerById(id), force: true);
-    }
   }
 
   void selectAllProviders(bool on) {
@@ -1098,8 +1098,8 @@ class Store extends ChangeNotifier {
   }
 
   /// Refreshes a provider's sources, but only if its interval has elapsed
-  /// (others: once per 12 hours, per source; Fast: only when it has no
-  /// cached configs at all, see _fresh) unless [force] is set.
+  /// (others: once per 12 hours, per source; Fast: only once ever, on
+  //  the first run after install — see _fresh) unless [force] is set.
   /// A failed source keeps its last known-good data; it is never cleared.
   /// Only stale sources are fetched: a provider with one dead source no longer
   /// re-fetches all of its healthy sources on every refresh, which is what was
@@ -1128,7 +1128,13 @@ class Store extends ChangeNotifier {
   }
 
   Future<void> refreshEnabledProviders({bool force = false}) async {
+    // User rule (v1.0.4): "Update selected" never touches Fast. Fast
+    // refreshes only on the first run after install, on its own row
+    // arrow, or via "Update all" (refreshAllProviders below). Skipping
+    // it here keeps a manual multi-provider update from burning its
+    // host's daily limit.
     for (final id in providerOrder) {
+      if (id == 'fast') continue;
       if (providerEnabled[id] == true) await refreshProvider(providerById(id), force: force);
     }
   }
