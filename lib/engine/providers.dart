@@ -148,23 +148,88 @@ ProviderDef? _providerFromObject(dynamic item) {
     final id = '${item['id'] ?? ''}';
     final name = '${item['name'] ?? ''}';
     final srcs = item['sources'];
-    if (id.isEmpty || name.isEmpty || srcs is! List || srcs.isEmpty) return null;
+    if (id.isEmpty || name.isEmpty) return null;
+    // Lenient: sources may be a list (normal) or a single string.
+    final rawSrcs = srcs is String ? [srcs] : (srcs is List ? srcs : null);
+    if (rawSrcs == null || rawSrcs.isEmpty) return null;
     final sources = <ProviderSource>[];
-    for (final s in srcs) {
+    for (final s in rawSrcs) {
       if (s is String && s.isNotEmpty) sources.add(_src(s));
     }
     if (sources.isEmpty) return null;
     final hours = item['hours'];
-    return ProviderDef(id, name, item['enabled'] == true, hours is int && hours > 0 ? hours : 6, sources);
+    final enabled = item['enabled'] == true || item['enabled'] == 'true';
+    return ProviderDef(id, name, enabled, hours is int && hours > 0 ? hours : 6, sources);
   } catch (_) {
     return null;
   }
 }
 
+/// Parses one per-provider secret value (already base64-decoded).
+/// Accepted shapes, in order:
+///   1. A JSON object: {"id": "...", "name": "...", "enabled": true,
+///      "hours": 6, "sources": ["https://...", ...]}
+///   2. A JSON array holding exactly one such object.
+///   3. Plain text: subscription URLs, one per line (the shape a user
+///      naturally pastes when they "put the sub link" in the secret).
+///      The provider id/name then come from the secret itself: the
+///      define for that provider maps to that provider id with its
+///      usual display name.
+/// Anything else yields null and the provider is left as-is, so a bad
+/// single secret never wipes out the other providers.
+ProviderDef? _parseSingleProviderSecret(String raw, String fallbackId, String fallbackName) {
+  final text = raw.trim();
+  if (text.isEmpty) return null;
+  try {
+    final decoded = jsonDecode(text);
+    if (decoded is Map) return _providerFromObject(decoded);
+    if (decoded is List && decoded.length == 1) return _providerFromObject(decoded.first);
+  } catch (_) {
+    // Not JSON: fall through to the plain-URL shape below.
+  }
+  final sources = <ProviderSource>[];
+  for (final part in text.split(RegExp(r'\s+'))) {
+    var s = part.trim();
+    if (s.startsWith('"') && s.endsWith('"') && s.length >= 2) s = s.substring(1, s.length - 1);
+    if (s.startsWith('http://') || s.startsWith('https://')) sources.add(_src(s));
+  }
+  if (sources.isEmpty) return null;
+  return ProviderDef(fallbackId, fallbackName, true, 6, sources);
+}
+
+/// One status line per per-provider secret, for the app's Logs screen.
+/// Names and counts only: secret VALUES are never logged. Lets the user
+/// see at a glance whether a secret was picked up or silently ignored.
+List<String> providerSecretDiagnostics() {
+  String describe(String secretName, String b64, String fallbackId, String fallbackName) {
+    if (b64.isEmpty) return 'Provider secret $secretName: not set';
+    ProviderDef? p;
+    try {
+      p = _parseSingleProviderSecret(utf8.decode(base64Decode(b64)), fallbackId, fallbackName);
+    } catch (_) {
+      p = null;
+    }
+    if (p == null) return 'Provider secret $secretName: ignored (unusable value)';
+    return 'Provider secret $secretName: ok (id=${p.id}, ${p.sources.length} sources)';
+  }
+
+  return [
+    describe('PROVIDER_FAST', const String.fromEnvironment('PROVIDER_FAST_B64'), 'fast', 'Fast'),
+    describe('PROVIDER_UPDATE', const String.fromEnvironment('PROVIDER_UPDATE_B64'), 'update', 'Update'),
+    describe('PROVIDER_V2RAYAG', const String.fromEnvironment('PROVIDER_V2RAYAG_B64'), 'v2rayag', 'V2rayAG Exclusive'),
+    describe('PROVIDER_ANTIFILTER', const String.fromEnvironment('PROVIDER_ANTIFILTER_B64'), 'antifilter', 'Anti-Filter'),
+    describe('PROVIDER_HIDDIFY', const String.fromEnvironment('PROVIDER_HIDDIFY_B64'), 'hiddify', 'Hiddify'),
+    describe('PROVIDER_AI', const String.fromEnvironment('PROVIDER_AI_B64'), 'ai', 'AI'),
+    describe('PROVIDER_UNLIMITED', const String.fromEnvironment('PROVIDER_UNLIMITED_B64'), 'unlimited', 'Unlimited'),
+  ];
+}
+
 /// Per-provider secrets: one GitHub secret per provider, so one provider
 /// can be added, removed or changed without touching the others and
-/// without them getting mixed up. Secret names (JSON object each, same
-/// shape as one entry of PROVIDERS_JSON):
+/// without them getting mixed up. Each secret accepts a JSON object
+/// (same shape as one entry of PROVIDERS_JSON), a JSON array holding
+/// exactly one such object, or plain subscription URLs, one per line
+/// (see _parseSingleProviderSecret). Secret names:
 ///   PROVIDER_FAST, PROVIDER_UPDATE, PROVIDER_V2RAYAG,
 ///   PROVIDER_ANTIFILTER, PROVIDER_HIDDIFY, PROVIDER_AI
 /// (PROVIDER_UNLIMITED was removed 2026-10-29: the user replaced the
@@ -181,28 +246,28 @@ List<ProviderDef> _applyPerProviderSecrets(List<ProviderDef> base) {
   // String.fromEnvironment needs a constant name, so each define is
   // read explicitly below.
   final overrides = <String, ProviderDef>{};
-  ProviderDef? read(String b64) {
+  ProviderDef? read(String b64, String fallbackId, String fallbackName) {
     if (b64.isEmpty) return null;
     try {
-      return _providerFromObject(jsonDecode(utf8.decode(base64Decode(b64))));
+      return _parseSingleProviderSecret(utf8.decode(base64Decode(b64)), fallbackId, fallbackName);
     } catch (_) {
       return null;
     }
   }
 
-  final fast = read(const String.fromEnvironment('PROVIDER_FAST_B64'));
+  final fast = read(const String.fromEnvironment('PROVIDER_FAST_B64'), 'fast', 'Fast');
   if (fast != null) overrides[fast.id] = fast;
-  final update = read(const String.fromEnvironment('PROVIDER_UPDATE_B64'));
+  final update = read(const String.fromEnvironment('PROVIDER_UPDATE_B64'), 'update', 'Update');
   if (update != null) overrides[update.id] = update;
-  final v2rayag = read(const String.fromEnvironment('PROVIDER_V2RAYAG_B64'));
+  final v2rayag = read(const String.fromEnvironment('PROVIDER_V2RAYAG_B64'), 'v2rayag', 'V2rayAG Exclusive');
   if (v2rayag != null) overrides[v2rayag.id] = v2rayag;
-  final antifilter = read(const String.fromEnvironment('PROVIDER_ANTIFILTER_B64'));
+  final antifilter = read(const String.fromEnvironment('PROVIDER_ANTIFILTER_B64'), 'antifilter', 'Anti-Filter');
   if (antifilter != null) overrides[antifilter.id] = antifilter;
-  final hiddify = read(const String.fromEnvironment('PROVIDER_HIDDIFY_B64'));
+  final hiddify = read(const String.fromEnvironment('PROVIDER_HIDDIFY_B64'), 'hiddify', 'Hiddify');
   if (hiddify != null) overrides[hiddify.id] = hiddify;
-  final ai = read(const String.fromEnvironment('PROVIDER_AI_B64'));
+  final ai = read(const String.fromEnvironment('PROVIDER_AI_B64'), 'ai', 'AI');
   if (ai != null) overrides[ai.id] = ai;
-  final unlimited = read(const String.fromEnvironment('PROVIDER_UNLIMITED_B64'));
+  final unlimited = read(const String.fromEnvironment('PROVIDER_UNLIMITED_B64'), 'unlimited', 'Unlimited');
   if (unlimited != null) overrides[unlimited.id] = unlimited;
   if (overrides.isEmpty) return base;
   final out = base.map((p) => overrides[p.id] ?? p).toList();
