@@ -137,10 +137,6 @@ final List<ProviderDef> _fallbackProviders = [
     _src('https://raw.githubusercontent.com/patterniha/Free-Configs/refs/heads/main/configs.txt#Patterniha'),
     _src('https://raw.githubusercontent.com/hiddify/hiddify-app/refs/heads/main/test.configs/mahsa#Mahsa'),
   ]),
-
-  ProviderDef('unlimited', 'Unlimited', false, 6, [
-    _src('https://minty-poppy-f314-8355a8c1.pages.dev/sub?token=263fe53cad18013df63511ca52c4d684'),
-  ]),
 ];
 
 /// One provider from a single JSON object, as used by the per-provider
@@ -170,7 +166,11 @@ ProviderDef? _providerFromObject(dynamic item) {
 /// without them getting mixed up. Secret names (JSON object each, same
 /// shape as one entry of PROVIDERS_JSON):
 ///   PROVIDER_FAST, PROVIDER_UPDATE, PROVIDER_V2RAYAG,
-///   PROVIDER_ANTIFILTER, PROVIDER_HIDDIFY, PROVIDER_UNLIMITED
+///   PROVIDER_ANTIFILTER, PROVIDER_HIDDIFY, PROVIDER_AI
+/// (PROVIDER_UNLIMITED was removed 2026-10-29: the user replaced the
+/// Unlimited provider with an AI provider, so no built-in Unlimited
+/// entry remains; re-adding a PROVIDER_UNLIMITED secret would append
+/// it back via the override logic below.)
 /// Each is passed base64 as dart-define PROVIDER_<ID>_B64. A set
 /// per-provider secret replaces that one provider in the list; the
 /// combined PROVIDERS_JSON list (when set) is the base it replaces
@@ -200,6 +200,8 @@ List<ProviderDef> _applyPerProviderSecrets(List<ProviderDef> base) {
   if (antifilter != null) overrides[antifilter.id] = antifilter;
   final hiddify = read(const String.fromEnvironment('PROVIDER_HIDDIFY_B64'));
   if (hiddify != null) overrides[hiddify.id] = hiddify;
+  final ai = read(const String.fromEnvironment('PROVIDER_AI_B64'));
+  if (ai != null) overrides[ai.id] = ai;
   final unlimited = read(const String.fromEnvironment('PROVIDER_UNLIMITED_B64'));
   if (unlimited != null) overrides[unlimited.id] = unlimited;
   if (overrides.isEmpty) return base;
