@@ -331,7 +331,7 @@ class Store extends ChangeNotifier {
   // fresh install kept Exclusive first; field defaults fix that.
   List<String> providerOrder = String.fromEnvironment('PROVIDERS_B64').isNotEmpty || String.fromEnvironment('PROVIDER_FAST_B64').isNotEmpty
       ? kProviders.map((p) => p.id).toList()
-      : ['fast', 'update', 'v2rayag', 'antifilter', 'hiddify', 'unlimited'];
+      : ['fast', 'update', 'v2rayag', 'antifilter', 'hiddify'];
   Map<String, int> providerLastRefresh = {};
   Map<String, Map<String, dynamic>> srcCache = {};
   final Map<String, String> providerStatus = {};
