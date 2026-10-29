@@ -35,6 +35,7 @@ jobs:
           PROVIDER_V2RAYAG: ${{ secrets.PROVIDER_V2RAYAG }}
           PROVIDER_ANTIFILTER: ${{ secrets.PROVIDER_ANTIFILTER }}
           PROVIDER_HIDDIFY: ${{ secrets.PROVIDER_HIDDIFY }}
+          PROVIDER_AI: ${{ secrets.PROVIDER_AI }}
           PROVIDER_UNLIMITED: ${{ secrets.PROVIDER_UNLIMITED }}
           PSIPHON_JSON: ${{ secrets.PSIPHON_JSON }}
           UNLIMITED_CONFIGS: ${{ secrets.UNLIMITED_CONFIGS }}
@@ -48,10 +49,11 @@ jobs:
           V2_B64=$(printf '%s' "$PROVIDER_V2RAYAG" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_V2RAYAG" | base64)
           AF_B64=$(printf '%s' "$PROVIDER_ANTIFILTER" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_ANTIFILTER" | base64)
           HID_B64=$(printf '%s' "$PROVIDER_HIDDIFY" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_HIDDIFY" | base64)
+          AI_B64=$(printf '%s' "$PROVIDER_AI" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_AI" | base64)
           UNLPROV_B64=$(printf '%s' "$PROVIDER_UNLIMITED" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_UNLIMITED" | base64)
           PSI_B64=$(printf '%s' "$PSIPHON_JSON" | base64 -w0 2>/dev/null || printf '%s' "$PSIPHON_JSON" | base64)
           UNL_B64=$(printf '%s' "$UNLIMITED_CONFIGS" | base64 -w0 2>/dev/null || printf '%s' "$UNLIMITED_CONFIGS" | base64)
-          flutter build apk --release --split-per-abi --dart-define=POOL_LIST="$LIST" --dart-define=POOL_URL="$POOL_URL" --dart-define=PROVIDERS_B64="$PROV_B64" --dart-define=PROVIDER_FAST_B64="$FAST_B64" --dart-define=PROVIDER_UPDATE_B64="$UPD_B64" --dart-define=PROVIDER_V2RAYAG_B64="$V2_B64" --dart-define=PROVIDER_ANTIFILTER_B64="$AF_B64" --dart-define=PROVIDER_HIDDIFY_B64="$HID_B64" --dart-define=PROVIDER_UNLIMITED_B64="$UNLPROV_B64" --dart-define=PSIPHON_B64="$PSI_B64" --dart-define=UNLIMITED_B64="$UNL_B64" --dart-define=BUILD_NUM="$NUM"
+          flutter build apk --release --split-per-abi --dart-define=POOL_LIST="$LIST" --dart-define=POOL_URL="$POOL_URL" --dart-define=PROVIDERS_B64="$PROV_B64" --dart-define=PROVIDER_FAST_B64="$FAST_B64" --dart-define=PROVIDER_UPDATE_B64="$UPD_B64" --dart-define=PROVIDER_V2RAYAG_B64="$V2_B64" --dart-define=PROVIDER_ANTIFILTER_B64="$AF_B64" --dart-define=PROVIDER_HIDDIFY_B64="$HID_B64" --dart-define=PROVIDER_AI_B64="$AI_B64" --dart-define=PROVIDER_UNLIMITED_B64="$UNLPROV_B64" --dart-define=PSIPHON_B64="$PSI_B64" --dart-define=UNLIMITED_B64="$UNL_B64" --dart-define=BUILD_NUM="$NUM"
       - name: Collect APKs by architecture
         run: |
           mkdir -p dist
@@ -69,6 +71,7 @@ jobs:
           PROVIDER_V2RAYAG: ${{ secrets.PROVIDER_V2RAYAG }}
           PROVIDER_ANTIFILTER: ${{ secrets.PROVIDER_ANTIFILTER }}
           PROVIDER_HIDDIFY: ${{ secrets.PROVIDER_HIDDIFY }}
+          PROVIDER_AI: ${{ secrets.PROVIDER_AI }}
           PROVIDER_UNLIMITED: ${{ secrets.PROVIDER_UNLIMITED }}
           PSIPHON_JSON: ${{ secrets.PSIPHON_JSON }}
           UNLIMITED_CONFIGS: ${{ secrets.UNLIMITED_CONFIGS }}
@@ -82,10 +85,11 @@ jobs:
           V2_B64=$(printf '%s' "$PROVIDER_V2RAYAG" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_V2RAYAG" | base64)
           AF_B64=$(printf '%s' "$PROVIDER_ANTIFILTER" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_ANTIFILTER" | base64)
           HID_B64=$(printf '%s' "$PROVIDER_HIDDIFY" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_HIDDIFY" | base64)
+          AI_B64=$(printf '%s' "$PROVIDER_AI" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_AI" | base64)
           UNLPROV_B64=$(printf '%s' "$PROVIDER_UNLIMITED" | base64 -w0 2>/dev/null || printf '%s' "$PROVIDER_UNLIMITED" | base64)
           PSI_B64=$(printf '%s' "$PSIPHON_JSON" | base64 -w0 2>/dev/null || printf '%s' "$PSIPHON_JSON" | base64)
           UNL_B64=$(printf '%s' "$UNLIMITED_CONFIGS" | base64 -w0 2>/dev/null || printf '%s' "$UNLIMITED_CONFIGS" | base64)
-          flutter build apk --release --dart-define=POOL_LIST="$LIST" --dart-define=POOL_URL="$POOL_URL" --dart-define=PROVIDERS_B64="$PROV_B64" --dart-define=PROVIDER_FAST_B64="$FAST_B64" --dart-define=PROVIDER_UPDATE_B64="$UPD_B64" --dart-define=PROVIDER_V2RAYAG_B64="$V2_B64" --dart-define=PROVIDER_ANTIFILTER_B64="$AF_B64" --dart-define=PROVIDER_HIDDIFY_B64="$HID_B64" --dart-define=PROVIDER_UNLIMITED_B64="$UNLPROV_B64" --dart-define=PSIPHON_B64="$PSI_B64" --dart-define=UNLIMITED_B64="$UNL_B64" --dart-define=BUILD_NUM="$NUM"
+          flutter build apk --release --dart-define=POOL_LIST="$LIST" --dart-define=POOL_URL="$POOL_URL" --dart-define=PROVIDERS_B64="$PROV_B64" --dart-define=PROVIDER_FAST_B64="$FAST_B64" --dart-define=PROVIDER_UPDATE_B64="$UPD_B64" --dart-define=PROVIDER_V2RAYAG_B64="$V2_B64" --dart-define=PROVIDER_ANTIFILTER_B64="$AF_B64" --dart-define=PROVIDER_HIDDIFY_B64="$HID_B64" --dart-define=PROVIDER_AI_B64="$AI_B64" --dart-define=PROVIDER_UNLIMITED_B64="$UNLPROV_B64" --dart-define=PSIPHON_B64="$PSI_B64" --dart-define=UNLIMITED_B64="$UNL_B64" --dart-define=BUILD_NUM="$NUM"
           cp build/app/outputs/flutter-apk/app-release.apk dist/V2rayAG-universal.apk
       - name: List files
         run: ls -la dist
@@ -113,6 +117,6 @@ jobs:
           gh release create "v$VERSION" dist/*.apk \
             --title "V2rayAG v$VERSION" \
             --latest \
-            --notes "V2rayAG v$VERSION - first official release.
+            --notes "V2rayAG v$VERSION.
 
           arm64-v8a: most phones made after 2017. armeabi-v7a: older 32-bit phones. universal: works on all phones, larger file."
