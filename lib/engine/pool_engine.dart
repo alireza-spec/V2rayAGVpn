@@ -702,8 +702,30 @@ class PoolEngine {
   /// to the session that requested it: if a failover already moved
   /// to another server, the stale answer is dropped instead of
   /// overwriting the new session's location.
+  /// v1.0.6: two robustness fixes for the blank "-" card. In VPN
+  /// mode a direct fetch already goes through the TUN, so it is a
+  /// safe second path to the exit IP; in proxy-only mode a direct
+  /// fetch would return the real IP, so it is never used as an
+  /// exit-IP answer there. And if every source fails (the tunnel
+  /// may still be settling: routes, DNS), it retries once after
+  /// 20s instead of leaving the card blank forever. The verify
+  /// speedup from v1.0.5 is untouched: this still never blocks
+  /// "Connected".
   Future<void> _refreshGeoInBackground(String link) async {
-    final geo = await _lookupIp();
+    Future<Map<String, String>?> fetch() async {
+      final g = await _lookupIp();
+      if (g != null) return g;
+      if (!proxyOnly) return _lookupIp(direct: true);
+      return null;
+    }
+
+    var geo = await fetch();
+    if (geo == null) {
+      log('Location lookup failed, retrying in 20s');
+      await Future.delayed(const Duration(seconds: 20));
+      if (!_wanted || _phase != Phase.connected || _cur?.link != link) return;
+      geo = await fetch();
+    }
     if (geo == null || !_wanted || _phase != Phase.connected || _cur?.link != link) return;
     _ip = geo['ip'];
     _loc = '${flagOf(geo['cc'] ?? '')} ${geo['loc'] ?? ''}'.trim();
@@ -1099,18 +1121,32 @@ class PoolEngine {
   Future<Map<String, String>?> _lookupIp({bool direct = false}) async {
     // v1.0.5: all sources are tried concurrently; the first valid
     // answer wins. Same URLs and timeouts as before.
-    const urls = ['http://ip-api.com/json', 'https://ipwho.is/', 'https://ipinfo.io/json', 'https://api.ipify.org?format=json'];
+    // v1.0.6: more sources, because one shared tunnel exit can be
+    // rate-limited or blocked on any single service. JSON sources
+    // first (they carry city/country), plain-IP sources last (they
+    // answer the IP but no location).
+    const urls = ['http://ip-api.com/json', 'https://ipwho.is/', 'https://ipinfo.io/json', 'https://api.ipify.org?format=json', 'https://api64.ipify.org?format=json', 'https://checkip.amazonaws.com', 'https://ifconfig.me/ip'];
     Future<Map<String, String>?> attempt(String u) async {
       final c = direct ? (HttpClient()..connectionTimeout = const Duration(seconds: 4)) : _client(const Duration(seconds: 4));
       try {
         final res = await (await c.getUrl(Uri.parse(u))).close().timeout(const Duration(seconds: 5));
-        final j = jsonDecode(await res.transform(utf8.decoder).join());
-        if (j is! Map || j['success'] == false || j['status'] == 'fail') return null;
-        final ip = '${j['ip'] ?? j['query'] ?? ''}';
-        if (ip.isEmpty) return null;
-        final loc = [j['city'], j['country'] ?? j['country_name']].where((e) => e != null && '$e'.isNotEmpty).join(', ');
-        final cc = '${j['countryCode'] ?? j['country_code'] ?? (('${j['country']}'.length == 2) ? j['country'] : '')}';
-        return {'ip': ip, 'loc': loc, 'cc': cc};
+        final body = await res.transform(utf8.decoder).join();
+        Map<String, dynamic>? j;
+        try {
+          final d = jsonDecode(body);
+          if (d is Map<String, dynamic>) j = d;
+        } catch (_) {}
+        if (j != null) {
+          if (j['success'] == false || j['status'] == 'fail') return null;
+          final ip = '${j['ip'] ?? j['query'] ?? ''}';
+          if (ip.isEmpty) return null;
+          final loc = [j['city'], j['country'] ?? j['country_name']].where((e) => e != null && '$e'.isNotEmpty).join(', ');
+          final cc = '${j['countryCode'] ?? j['country_code'] ?? (('${j['country']}'.length == 2) ? j['country'] : '')}';
+          return {'ip': ip, 'loc': loc, 'cc': cc};
+        }
+        final plain = body.trim();
+        if (RegExp(r'^\d{1,3}(\.\d{1,3}){3}$').hasMatch(plain)) return {'ip': plain, 'loc': '', 'cc': ''};
+        return null;
       } catch (_) {
         return null;
       } finally {

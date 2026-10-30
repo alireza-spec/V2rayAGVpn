@@ -109,7 +109,12 @@ class PsiphonEngine {
   // currently has to tap connect a second time by hand for the same
   // effect. Exactly one retry per user connect, never after a manual
   // disconnect, never once this attempt has connected.
-  bool _autoRetryUsed = false;
+  // v1.0.6: up to 3 automatic re-dials for a first attempt that never
+  // connected (was 1). On a filtered network the first dial often
+  // runs on a stale server list; each re-dial warms the core's list,
+  // so one retry was not enough. Never after a manual disconnect,
+  // never once connected (see _autoRetry's guards).
+  int _autoRetryCount = 0;
   bool _connectedOnce = false;
   // v48: when a connected tunnel starts re-dialing (see 'connecting'
   // below), the moment the re-dial began. After 60s without
@@ -215,10 +220,10 @@ class PsiphonEngine {
   /// failed); false when no retry applies, in which case the caller
   /// reports the failure itself. Never sets a failure state itself.
   Future<bool> _autoRetry() async {
-    if (_autoRetryUsed || _connectedOnce) return false;
-    _autoRetryUsed = true;
+    if (_autoRetryCount >= 3 || _connectedOnce) return false;
+    _autoRetryCount++;
     _wanted = true;
-    log('Psiphon: first dial failed, retrying once automatically');
+    log('Psiphon: first dial failed, retrying automatically ($_autoRetryCount/3)');
     _set(const PsiphonState(phase: PsiphonPhase.connecting, message: 'Retrying'));
     try {
       await _m.invokeMethod('start');
@@ -232,7 +237,7 @@ class PsiphonEngine {
 
   Future<void> connect() async {
     if (_wanted) return;
-    _autoRetryUsed = false;
+    _autoRetryCount = 0;
     _connectedOnce = false;
     init();
     if (!await isConfigured()) {
@@ -341,10 +346,17 @@ class PsiphonEngine {
         _tick?.cancel();
         _redialAt = null;
         if (_wanted) {
-          // tunnel-core exited on its own; honest state, not a silent "still connected".
+          // tunnel-core exited on its own; honest state, not a silent
+          // "still connected". v1.0.6: a first-dial exit also spends
+          // the automatic retry budget (same rules as 'failed'),
+          // instead of ending the attempt outright.
           log('Psiphon: tunnel exited');
-          _set(const PsiphonState(phase: PsiphonPhase.failed, message: 'The Psiphon tunnel stopped'));
-          _wanted = false;
+          _autoRetry().then((retried) {
+            if (!retried) {
+              _wanted = false;
+              _set(const PsiphonState(phase: PsiphonPhase.failed, message: 'The Psiphon tunnel stopped'));
+            }
+          });
         }
         break;
       case 'log':
@@ -446,9 +458,17 @@ class PsiphonEngine {
   /// the connection itself. The session's connectedAt pins the
   /// lookup: if a new session started meanwhile, the stale answer
   /// is dropped instead of overwriting the new session's location.
+  /// v1.0.6: one retry after 20s when every source fails, instead of
+  /// leaving the card blank forever (same verify-speedup guarantee
+  /// as v1.0.5: this never blocks "Connected").
   Future<void> _refreshGeo() async {
     final at = _s.connectedAt;
-    final geo = await _lookupIp();
+    var geo = await _lookupIp();
+    if (geo == null) {
+      await Future.delayed(const Duration(seconds: 20));
+      if (!_wanted || _s.phase != PsiphonPhase.connected || _s.connectedAt != at) return;
+      geo = await _lookupIp();
+    }
     if (geo == null || !_wanted || _s.phase != PsiphonPhase.connected || _s.connectedAt != at) return;
     final cur = _s;
     _set(PsiphonState(
@@ -575,19 +595,34 @@ class PsiphonEngine {
   }
 
   Future<Map<String, String>?> _lookupIp() async {
-    // v1.0.5: both sources are tried concurrently; the first valid
-    // answer wins. Same URLs and timeouts as before.
+    // v1.0.5: sources are tried concurrently; the first valid answer
+    // wins. Same URLs and timeouts as before.
+    // v1.0.6: more sources (a shared exit can be rate-limited on any
+    // single service). JSON sources first (city/country), plain-IP
+    // sources last. No direct (non-tunnel) fallback here: in proxy
+    // mode it would return the real IP, which must never be shown as
+    // the exit IP.
     Future<Map<String, String>?> attempt(String u) async {
       final c = _client(const Duration(seconds: 5));
       try {
         final res = await (await c.getUrl(Uri.parse(u))).close().timeout(const Duration(seconds: 6));
-        final j = jsonDecode(await res.transform(utf8.decoder).join());
-        if (j is! Map || j['success'] == false || j['status'] == 'fail') return null;
-        final ip = '${j['ip'] ?? j['query'] ?? ''}';
-        if (ip.isEmpty) return null;
-        final loc = [j['city'], j['country'] ?? j['country_name']].where((e) => e != null && '$e'.isNotEmpty).join(', ');
-        final cc = '${j['countryCode'] ?? j['country_code'] ?? ''}';
-        return {'ip': ip, 'loc': loc, 'cc': cc};
+        final body = await res.transform(utf8.decoder).join();
+        Map<String, dynamic>? j;
+        try {
+          final d = jsonDecode(body);
+          if (d is Map<String, dynamic>) j = d;
+        } catch (_) {}
+        if (j != null) {
+          if (j['success'] == false || j['status'] == 'fail') return null;
+          final ip = '${j['ip'] ?? j['query'] ?? ''}';
+          if (ip.isEmpty) return null;
+          final loc = [j['city'], j['country'] ?? j['country_name']].where((e) => e != null && '$e'.isNotEmpty).join(', ');
+          final cc = '${j['countryCode'] ?? j['country_code'] ?? (('${j['country']}'.length == 2) ? j['country'] : '')}';
+          return {'ip': ip, 'loc': loc, 'cc': cc};
+        }
+        final plain = body.trim();
+        if (RegExp(r'^\d{1,3}(\.\d{1,3}){3}$').hasMatch(plain)) return {'ip': plain, 'loc': '', 'cc': ''};
+        return null;
       } catch (_) {
         return null;
       } finally {
@@ -598,6 +633,11 @@ class PsiphonEngine {
     final results = await Future.wait([
       attempt('http://ip-api.com/json'),
       attempt('https://ipwho.is/'),
+      attempt('https://ipinfo.io/json'),
+      attempt('https://api.ipify.org?format=json'),
+      attempt('https://api64.ipify.org?format=json'),
+      attempt('https://checkip.amazonaws.com'),
+      attempt('https://ifconfig.me/ip'),
     ]);
     for (final r in results) {
       if (r != null) return r;
