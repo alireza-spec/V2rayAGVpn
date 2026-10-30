@@ -235,6 +235,9 @@ class Store extends ChangeNotifier {
       if (e.phase != _lastPsiPhase) {
         _lastPsiPhase = e.phase;
         _syncPsiSession();
+        // v1.0.5: same post-connect zero refresh as the core engine
+        // path — the Psiphon tunnel can reach the same hosts.
+        if (e.phase == PsiphonPhase.connected) _afterConnectRefresh();
       }
     });
     engine.states.listen((e) {
@@ -257,6 +260,9 @@ class Store extends ChangeNotifier {
       if (changed && e.phase == Phase.connected) {
         sessionData = engine.sessionJson();
         save();
+        // v1.0.5: a fresh tunnel can reach hosts the bare network
+        // could not — fill zero-config providers from it now.
+        _afterConnectRefresh();
       }
       if (changed && (e.phase == Phase.idle || e.phase == Phase.failed) && sessionData != null) {
         sessionData = null;
@@ -266,6 +272,13 @@ class Store extends ChangeNotifier {
     });
     Timer.periodic(const Duration(minutes: 5), (_) {
       if (mySubs.isNotEmpty) refreshSubs();
+    });
+    // v1.0.5: the 12h rule also applies while the app stays open, not
+    // only at startup. Every 30 minutes, refresh stale non-Fast
+    // providers (non-force, so fresh sources are untouched and Fast
+    // is never auto-refreshed).
+    Timer.periodic(const Duration(minutes: 30), (_) {
+      if (_hasStaleProvider()) _autoRefresh(_refreshStaleProviders);
     });
   }
   Timer? _pulseT;
@@ -460,7 +473,7 @@ class Store extends ChangeNotifier {
         // upgrading to this build) tries everything instead of only
         // V2rayAG Exclusive. The user can change this afterwards; the
         // version flag stops it from resetting on every launch.
-        const desired = ['fast', 'update', 'v2rayag', 'antifilter', 'hiddify', 'unlimited'];
+        const desired = ['fast', 'update', 'v2rayag', 'antifilter', 'hiddify', 'ai', 'unlimited'];
         final rest = providerOrder.where((id) => !desired.contains(id)).toList();
         providerOrder = [...desired.where((id) => kProviders.any((p) => p.id == id)), ...rest];
         for (final id in providerOrder) {
@@ -1145,9 +1158,63 @@ class Store extends ChangeNotifier {
   /// the active tunnel.
   Future<void> refreshZeroProviders() async {
     for (final id in providerOrder) {
+      // v1.0.5: Fast is never auto-refreshed, not even here — its
+      // once-ever rule (v1.0.3/v1.0.4) covers automatic refreshes too.
+      if (id == 'fast') continue;
       if (providerEnabled[id] == true && providerConfigCount(id) == 0) {
         await refreshProvider(providerById(id), force: true);
       }
+    }
+  }
+
+  /// Automatic refreshes (post-connect zero refresh, periodic 12h
+  /// check) never overlap each other: if one is already running, the
+  /// new one is skipped. Manual taps are not routed through here, so
+  /// a user tap is never swallowed by a background refresh.
+  bool _autoRefreshing = false;
+
+  Future<void> _autoRefresh(Future<void> Function() job) async {
+    if (_autoRefreshing) return;
+    _autoRefreshing = true;
+    try {
+      await job();
+    } finally {
+      _autoRefreshing = false;
+    }
+  }
+
+  /// After a successful connect, fill providers that still have zero
+  /// configs (fresh installs, or a host that failed directly) using
+  /// the fresh tunnel. This is what makes "nothing stays zero" true
+  /// for a host that is unreachable without a VPN: direct fetch at
+  /// startup cannot reach it, but the tunnel retry can.
+  void _afterConnectRefresh() {
+    _autoRefresh(refreshZeroProviders);
+  }
+
+  /// True when any non-Fast provider has a source older than 12h (or
+  /// never fetched). The periodic timer checks this first so it stays
+  /// silent when nothing is due, instead of logging "cache still
+  /// fresh" for every provider every 30 minutes.
+  bool _hasStaleProvider() {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    for (final p in kProviders) {
+      if (p.id == 'fast') continue;
+      for (final src in p.sources) {
+        final c = srcCache[src.url];
+        if (c == null || now - (c['fetchedAt'] as int) >= 12 * 3600) return true;
+      }
+    }
+    return false;
+  }
+
+  /// Non-force refresh of every non-Fast provider: only stale sources
+  /// are fetched (refreshProvider filters them), so fresh sources are
+  /// untouched and Fast is never auto-refreshed.
+  Future<void> _refreshStaleProviders() async {
+    for (final p in kProviders) {
+      if (p.id == 'fast') continue;
+      await refreshProvider(p);
     }
   }
 
