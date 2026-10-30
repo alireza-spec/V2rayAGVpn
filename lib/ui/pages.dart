@@ -12,8 +12,10 @@ import '../engine/native.dart';
 import '../engine/pool_engine.dart';
 import '../engine/psiphon_engine.dart';
 import '../engine/scanner.dart';
+import 'ai_chat.dart';
 import 'logo.dart';
 import 'net_tools.dart';
+import 'share_vpn.dart';
 import 'speed_page.dart';
 
 const kTelegram = 'https://t.me/V2rayAG';
@@ -65,6 +67,31 @@ Widget infoRow(String k, String v) => Padding(
         Flexible(child: Text(v, textAlign: TextAlign.end, style: const TextStyle(fontWeight: FontWeight.w700))),
       ]),
     );
+
+/// v1.0.7: info row whose value is a widget — used for the geo
+/// rows, where a small spinner replaces "-" while the background
+/// location lookup is still running (detecting, not empty).
+Widget infoRowW(String k, Widget v) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text(k, style: const TextStyle(color: Colors.grey)),
+        const SizedBox(width: 16),
+        Flexible(child: Align(alignment: AlignmentDirectional.centerEnd, child: v)),
+      ]),
+    );
+
+/// v1.0.7: the value side of a geo row: spinner while detecting,
+/// "-" only after the lookup finished (or was never needed), the
+/// real value once it lands.
+Widget geoValue({required bool loading, required String? value}) {
+  if (value != null && value.isNotEmpty) return Text(value, textAlign: TextAlign.end, style: const TextStyle(fontWeight: FontWeight.w700));
+  if (loading) {
+    return const Row(mainAxisSize: MainAxisSize.min, children: [
+      SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+    ]);
+  }
+  return const Text('-', textAlign: TextAlign.end, style: TextStyle(fontWeight: FontWeight.w700));
+}
 
 Future<String?> ask(BuildContext c, Store s, String title, {String initial = ''}) {
   final ctl = TextEditingController(text: initial);
@@ -119,6 +146,11 @@ class Shell extends StatelessWidget {
                   },
                 ),
                 IconButton(icon: const Icon(Icons.article_outlined), onPressed: () => Navigator.push(ctx, MaterialPageRoute(builder: (_) => LogsPage(s)))),
+                IconButton(
+                  icon: Icon(Icons.auto_awesome, color: Theme.of(ctx).colorScheme.primary),
+                  tooltip: s.t('aichat'),
+                  onPressed: () => Navigator.push(ctx, MaterialPageRoute(builder: (_) => AiChatPage(s))),
+                ),
               ],
             ),
             drawer: Drawer(
@@ -458,8 +490,8 @@ class HomePage extends StatelessWidget {
                   padding: const EdgeInsets.all(16),
                   child: Column(children: [
                     infoRow(s.t('server'), e.configName ?? '-'),
-                    infoRow(s.t('ip'), e.exitIp ?? '-'),
-                    infoRow(s.t('loc'), (e.location ?? '').isEmpty ? '-' : e.location!),
+                    infoRowW(s.t('ip'), geoValue(loading: e.geoLoading, value: e.exitIp)),
+                    infoRowW(s.t('loc'), geoValue(loading: e.geoLoading, value: (e.location ?? '').isEmpty ? null : e.location)),
                     infoRow(s.t('ping'), e.delayMs == null ? '-' : '${e.delayMs} ms'),
                     if (s.connType == 'vpn') infoRow(s.t('tun'), e.tunOk ? s.t('active') : s.t('missing')),
                     if (e.proxyInfo != null) infoRow(s.t('proxyinfo'), e.proxyInfo!),
@@ -478,8 +510,14 @@ class HomePage extends StatelessWidget {
               ]),
               Row(children: [
                 OutlinedButton.icon(icon: const Icon(Icons.speed), label: Text(s.t('speedtest')), onPressed: () => Navigator.push(ctx, MaterialPageRoute(builder: (_) => SpeedTestPage(s, autoStart: true)))),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.copy, size: 18),
+                  label: Text(s.t('copyaddr')),
+                  onPressed: e.exitIp == null || e.exitIp!.isEmpty ? null : () => copyText(ctx, s, e.exitIp!),
+                ),
                 const SizedBox(width: 12),
-                Text(s.speedResult, style: const TextStyle(fontWeight: FontWeight.w800)),
+                Expanded(child: Text(s.speedResult, style: const TextStyle(fontWeight: FontWeight.w800))),
               ]),
               if (sub != null && sub.url.isNotEmpty) SubCard(s, sub),
               Center(child: FilledButton.tonal(onPressed: s.disconnectAll, child: Text(s.t('disconnect')))),
@@ -568,8 +606,8 @@ class HomePage extends StatelessWidget {
                   padding: const EdgeInsets.all(16),
                   child: Column(children: [
                     infoRow(s.t('conntype'), s.t('psiphon')),
-                    infoRow(s.t('ip'), e.exitIp ?? '-'),
-                    infoRow(s.t('loc'), locShown),
+                    infoRowW(s.t('ip'), geoValue(loading: e.geoLoading, value: e.exitIp)),
+                    infoRowW(s.t('loc'), geoValue(loading: e.geoLoading, value: (e.location ?? '').isEmpty ? null : locShown)),
                     infoRow(s.t('ping'), e.pingMs == null ? '-' : '${e.pingMs} ms'),
                     infoRow(s.t('down'), '${fmtBytes(e.downSpeed)}/s'),
                     infoRow(s.t('up'), '${fmtBytes(e.upSpeed)}/s'),
@@ -598,7 +636,15 @@ class HomePage extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 8),
-              OutlinedButton.icon(icon: const Icon(Icons.speed), label: Text(s.t('speedtest')), onPressed: () => Navigator.push(ctx, MaterialPageRoute(builder: (_) => SpeedTestPage(s, autoStart: true)))),
+              Row(children: [
+                OutlinedButton.icon(icon: const Icon(Icons.speed), label: Text(s.t('speedtest')), onPressed: () => Navigator.push(ctx, MaterialPageRoute(builder: (_) => SpeedTestPage(s, autoStart: true)))),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.copy, size: 18),
+                  label: Text(s.t('copyaddr')),
+                  onPressed: e.exitIp == null || e.exitIp!.isEmpty ? null : () => copyText(ctx, s, e.exitIp!),
+                ),
+              ]),
             ],
           ]);
         },
@@ -1615,37 +1661,86 @@ class ToolsPage extends StatefulWidget {
 class _ToolsState extends State<ToolsPage> {
   late final ipCtl = TextEditingController(text: widget.s.cleanIp);
   late final hostCtl = TextEditingController(text: widget.s.frontHost);
-  final ranges = <String>{...kCfRanges.take(4)};
-  final hits = <ScanHit>[];
-  int count = 150, done = 0;
-  bool running = false, stop = false;
   String myIp = '';
+  bool hostsExpanded = false;
+  // v1.0.7: IPs imported from a .txt file (session list, like the
+  // scanner hits: the chosen clean IP persists, the list itself
+  // does not need to).
+  final importedIps = <String>[];
+  final importedIpMs = <String, int>{};
+  bool testingImported = false;
 
-  Future<void> _scan() async {
-    setState(() {
-      hits.clear();
-      done = 0;
-      running = true;
-      stop = false;
-    });
-    await scanRanges(
-      ranges: ranges.toList(),
-      count: count,
-      sni: hostCtl.text.trim().isEmpty ? 'cloudflare.com' : hostCtl.text.trim(),
-      onHit: (h) {
-        if (mounted) setState(() => hits.add(h));
-      },
-      onProgress: (n) {
-        if (mounted) setState(() => done = n);
-      },
-      cancelled: () => stop || !mounted,
-    );
-    if (mounted) {
-      setState(() {
-        running = false;
-        hits.sort((a, b) => a.ms.compareTo(b.ms));
-      });
+  /// Reads a picked .txt file as text, or null when cancelled or
+  /// unreadable. Same pattern as the subscription file import.
+  Future<String?> _pickTxt() async {
+    try {
+      final file = await FilePicker.pickFile();
+      if (file == null) return null;
+      try {
+        final bytes = await file.readAsBytes();
+        return utf8.decode(bytes);
+      } catch (_) {
+        final path = file.path;
+        if (path == null) return null;
+        return await File(path).readAsString();
+      }
+    } catch (_) {
+      return null;
     }
+  }
+
+  Future<void> _importHosts() async {
+    final text = await _pickTxt();
+    if (text == null || !mounted) return;
+    final n = widget.s.addUserHosts(text);
+    if (mounted) toast(context, '${widget.s.t('added')}: $n');
+  }
+
+  Future<void> _importIps() async {
+    final text = await _pickTxt();
+    if (text == null || !mounted) return;
+    final ipRe = RegExp(r'^\d{1,3}(\.\d{1,3}){3}$');
+    final seen = <String>{};
+    final out = <String>[];
+    for (final token in text.split(RegExp(r'[\s,;]+'))) {
+      final v = token.trim();
+      if (v.isEmpty || !ipRe.hasMatch(v)) continue;
+      final parts = v.split('.').map(int.tryParse).toList();
+      if (parts.any((e) => e == null || e > 255)) continue;
+      if (seen.add(v)) out.add(v);
+      if (out.length >= 500) break;
+    }
+    setState(() {
+      importedIps
+        ..clear()
+        ..addAll(out);
+      importedIpMs.clear();
+    });
+    if (mounted) toast(context, '${widget.s.t('added')}: ${out.length}');
+  }
+
+  /// Real TLS probes of the imported IPs against the chosen SNI
+  /// (the same probeIp the scanner uses): only IPs that answer
+  /// Cloudflare's trace page are usable as clean IPs.
+  Future<void> _testImportedIps() async {
+    if (testingImported || importedIps.isEmpty) return;
+    setState(() {
+      testingImported = true;
+      importedIpMs.clear();
+    });
+    final sni = hostCtl.text.trim().isEmpty ? 'speed.cloudflare.com' : hostCtl.text.trim();
+    final queue = [...importedIps];
+    var i = 0;
+    Future<void> worker() async {
+      while (i < queue.length) {
+        final ip = queue[i++];
+        final h = await probeIp(ip, sni);
+        if (mounted) setState(() => importedIpMs[ip] = h == null ? -1 : h.ms);
+      }
+    }
+
+    await Future.wait(List.generate(8, (_) => worker()));
+    if (mounted) setState(() => testingImported = false);
   }
 
   Future<void> _myIp() async {
@@ -1664,11 +1759,13 @@ class _ToolsState extends State<ToolsPage> {
   @override
   Widget build(BuildContext context) {
     final s = widget.s;
+    final hosts = s.allHosts;
+    final healthyHosts = hosts.where((h) => (s.hostMs[h] ?? -1) > 0).toList()..sort((a, b) => s.hostMs[a]!.compareTo(s.hostMs[b]!));
+    final healthyImported = importedIps.where((ip) => (importedIpMs[ip] ?? -1) > 0).toList()..sort((a, b) => importedIpMs[a]!.compareTo(importedIpMs[b]!));
     return ListView(padding: const EdgeInsets.all(16), children: [
-      Text(s.t('fronting'), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
-      const SizedBox(height: 8),
-      TextField(
-        controller: ipCtl,
+      _section(context, s, Icons.cloud_outlined, s.t('cat_fronting'), s.t('cat_fronting_d'), [
+        TextField(
+          controller: ipCtl,
         decoration: InputDecoration(labelText: s.t('cleanip'), border: const OutlineInputBorder()),
         onChanged: (v) {
           s.cleanIp = v.trim();
@@ -1683,13 +1780,10 @@ class _ToolsState extends State<ToolsPage> {
           s.frontHost = v.trim();
           s.save();
         },
-      ),
-      const Divider(height: 32),
-      Text(s.t('scanner'), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
-      const SizedBox(height: 4),
-      Text(s.t('scan_h'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
-      const SizedBox(height: 8),
-      Wrap(spacing: 8, children: [
+        ),
+      ]),
+      _section(context, s, Icons.radar, s.t('cat_scan'), s.t('cat_scan_d'), [
+        Wrap(spacing: 8, children: [
         for (final c in ['Cloudflare', 'Fastly'])
           ChoiceChip(
             label: Text(c),
@@ -1759,61 +1853,137 @@ class _ToolsState extends State<ToolsPage> {
           ]),
           onTap: () => copyText(context, s, h.ip),
         ),
-      const Divider(height: 32),
-      Text(s.t('hosts'), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
-      const SizedBox(height: 4),
-      Text(s.t('hostnote'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
-      const SizedBox(height: 8),
-      FilledButton.icon(
-        icon: const Icon(Icons.travel_explore),
-        label: Text(s.hostTesting ? '...' : s.t('hosttest')),
-        onPressed: s.hostTesting
-            ? null
-            : () async {
-                await s.testHosts();
-                hostCtl.text = s.frontHost;
-              },
-      ),
-      for (final h in Store.hostPresets)
-        ListTile(
-          dense: true,
-          title: Text(h),
-          trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-            Text(s.hostMs[h] == null ? '' : (s.hostMs[h]! < 0 ? 'no reply' : '${s.hostMs[h]} ms'), style: TextStyle(color: s.hostMs[h] != null && s.hostMs[h]! < 0 ? Colors.redAccent : null)),
-            IconButton(
-              icon: Icon(s.frontHost == h ? Icons.check_circle : Icons.check_circle_outline),
-              onPressed: () {
-                hostCtl.text = h;
-                s.frontHost = h;
-                s.save();
-              },
+        const Divider(height: 24),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          OutlinedButton.icon(icon: const Icon(Icons.file_upload_outlined, size: 18), label: Text(s.t('importips')), onPressed: _importIps),
+          if (importedIps.isNotEmpty)
+            OutlinedButton.icon(icon: const Icon(Icons.speed, size: 18), label: Text(testingImported ? '...' : s.t('testimported')), onPressed: testingImported ? null : _testImportedIps),
+          if (healthyImported.isNotEmpty) OutlinedButton.icon(icon: const Icon(Icons.copy, size: 18), label: Text(s.t('copyhealthy')), onPressed: () => copyText(context, s, healthyImported.join('\n'))),
+        ]),
+        for (final ip in importedIps)
+          ListTile(
+            dense: true,
+            title: Text(ip, style: const TextStyle(fontWeight: FontWeight.w700)),
+            trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text(importedIpMs[ip] == null ? '' : (importedIpMs[ip]! < 0 ? 'no reply' : '${importedIpMs[ip]} ms'), style: TextStyle(color: importedIpMs[ip] != null && importedIpMs[ip]! < 0 ? Colors.redAccent : null)),
+              IconButton(
+                icon: Icon(s.cleanIp == ip ? Icons.check_circle : Icons.check_circle_outline),
+                onPressed: () {
+                  ipCtl.text = ip;
+                  s.cleanIp = ip;
+                  s.save();
+                },
+              ),
+            ]),
+            onTap: () => copyText(context, s, ip),
+          ),
+      ]),
+      Card(
+        margin: const EdgeInsets.only(bottom: 16),
+        child: ExpansionTile(
+          leading: const Icon(Icons.dns_outlined),
+          title: Text('${s.t('cat_hosts')} (${hosts.length})', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+          subtitle: Text(s.t('cat_hosts_d'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+          initiallyExpanded: hostsExpanded,
+          onExpansionChanged: (v) => hostsExpanded = v,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(s.t('hostgrid_d'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                const SizedBox(height: 8),
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  FilledButton.icon(
+                    icon: const Icon(Icons.travel_explore),
+                    label: Text(s.hostTesting ? '...' : s.t('hosttest')),
+                    onPressed: s.hostTesting
+                        ? null
+                        : () async {
+                            await s.testHosts();
+                            hostCtl.text = s.frontHost;
+                          },
+                  ),
+                  OutlinedButton.icon(icon: const Icon(Icons.file_upload_outlined, size: 18), label: Text(s.t('importfile')), onPressed: _importHosts),
+                  if (healthyHosts.isNotEmpty) OutlinedButton.icon(icon: const Icon(Icons.copy, size: 18), label: Text(s.t('copyhealthy')), onPressed: () => copyText(context, s, healthyHosts.join('\n'))),
+                ]),
+                const SizedBox(height: 12),
+                GridView.count(
+                  crossAxisCount: 5,
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  mainAxisSpacing: 6,
+                  crossAxisSpacing: 6,
+                  childAspectRatio: 0.9,
+                  children: [
+                    for (final h in hosts)
+                      InkWell(
+                        onTap: () {
+                          hostCtl.text = h;
+                          s.frontHost = h;
+                          s.save();
+                        },
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: s.frontHost == h ? Theme.of(context).colorScheme.primary : Theme.of(context).colorScheme.onSurface.withOpacity(.15)),
+                            color: s.frontHost == h ? Theme.of(context).colorScheme.primary.withOpacity(.12) : null,
+                          ),
+                          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                            Icon(
+                              s.hostMs[h] == null ? Icons.circle_outlined : (s.hostMs[h]! < 0 ? Icons.cancel : Icons.check_circle),
+                              size: 14,
+                              color: s.hostMs[h] == null ? Colors.grey : (s.hostMs[h]! < 0 ? Colors.redAccent : const Color(0xFF2BD67B)),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(h, textAlign: TextAlign.center, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 9)),
+                          ]),
+                        ),
+                      ),
+                  ],
+                ),
+              ]),
             ),
-          ]),
+          ],
         ),
-      const Divider(height: 32),
-      OutlinedButton.icon(
-        icon: const Icon(Icons.bug_report_outlined),
-        label: Text(s.t('selftest')),
-        onPressed: () async {
-          final r = await s.selfTest();
-          if (context.mounted) toast(context, r);
-        },
       ),
-      const SizedBox(height: 8),
-      OutlinedButton.icon(icon: const Icon(Icons.public), label: Text(s.t('myip')), onPressed: _myIp),
-      if (myIp.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 8), child: Text(myIp)),
-      const Divider(height: 32),
-      Text(s.t('nettools'), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
-      const SizedBox(height: 4),
-      Text(s.t('nettools_d'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
-      const SizedBox(height: 8),
-      OutlinedButton.icon(icon: const Icon(Icons.dns_outlined), label: Text(s.t('dnstest')), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => DnsTestPage(s)))),
-      const SizedBox(height: 8),
-      OutlinedButton.icon(icon: const Icon(Icons.language_outlined), label: Text(s.t('domaincheck')), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => DomainCheckPage(s)))),
-      const SizedBox(height: 8),
-      OutlinedButton.icon(icon: const Icon(Icons.swap_horiz_outlined), label: Text(s.t('vlessmod')), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => VlessModifierPage(s)))),
+      _section(context, s, Icons.bug_report_outlined, s.t('cat_checks'), s.t('cat_checks_d'), [
+        OutlinedButton.icon(
+          icon: const Icon(Icons.bug_report_outlined),
+          label: Text(s.t('selftest')),
+          onPressed: () async {
+            final r = await s.selfTest();
+            if (context.mounted) toast(context, r);
+          },
+        ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(icon: const Icon(Icons.public), label: Text(s.t('myip')), onPressed: _myIp),
+        if (myIp.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 8), child: Text(myIp)),
+      ]),
+      _section(context, s, Icons.build_outlined, s.t('cat_net'), s.t('cat_net_d'), [
+        OutlinedButton.icon(icon: const Icon(Icons.dns_outlined), label: Text(s.t('dnstest')), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => DnsTestPage(s)))),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(icon: const Icon(Icons.language_outlined), label: Text(s.t('domaincheck')), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => DomainCheckPage(s)))),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(icon: const Icon(Icons.swap_horiz_outlined), label: Text(s.t('vlessmod')), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => VlessModifierPage(s)))),
+      ]),
     ]);
   }
+
+  Widget _section(BuildContext context, Store s, IconData icon, String title, String desc, List<Widget> children) => Card(
+        margin: const EdgeInsets.only(bottom: 16),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [Icon(icon, size: 20), const SizedBox(width: 8), Expanded(child: Text(title, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)))]),
+            const SizedBox(height: 4),
+            Text(desc, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+            const SizedBox(height: 12),
+            ...children,
+          ]),
+        ),
+      );
 }
 
 // ---------------------------------------------------------------- apps
@@ -2047,6 +2217,10 @@ class SettingsPage extends StatelessWidget {
           s.deleteConfirm = v;
           s.save();
         }),
+        SwitchListTile(title: Text(s.t('ipv6')), subtitle: Text(s.t('ipv6_h')), value: s.useIpv6, onChanged: (v) {
+          s.useIpv6 = v;
+          s.save();
+        }),
         const SizedBox(height: 8),
         TextFormField(
           initialValue: s.testUrl,
@@ -2071,6 +2245,44 @@ class SettingsPage extends StatelessWidget {
           },
         ),
         const SizedBox(height: 16),
+        ListTile(leading: const Icon(Icons.share_outlined), title: Text(s.t('sharevpn')), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ShareVpnPage(s)))),
+        ListTile(leading: const Icon(Icons.auto_awesome), title: Text(s.t('aichat')), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AiChatPage(s)))),
+        ListTile(title: Text(s.t('aikey')), subtitle: Text(s.t('aikey_h'))),
+        TextFormField(
+          initialValue: s.aiApiKey,
+          obscureText: true,
+          decoration: InputDecoration(labelText: s.t('aikey'), border: const OutlineInputBorder()),
+          onChanged: (v) {
+            s.aiApiKey = v.trim();
+            s.save();
+          },
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(s.aiApiKey.isNotEmpty ? s.t('aikey_own') : (s.aiReady ? s.t('aikey_builtin') : s.t('aikey_none')), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+        ),
+        const SizedBox(height: 12),
+        ListTile(title: Text(s.t('airemote')), subtitle: Text(s.t('airemote_h'))),
+        TextFormField(
+          initialValue: s.aiRemoteUrl,
+          decoration: InputDecoration(labelText: s.t('airemote'), border: const OutlineInputBorder()),
+          onChanged: (v) {
+            s.aiRemoteUrl = v.trim();
+            s.save();
+          },
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: OutlinedButton.icon(
+            icon: const Icon(Icons.refresh, size: 18),
+            label: Text(s.t('airefresh')),
+            onPressed: () async {
+              final r = await s.refreshAiRemote();
+              if (context.mounted) toast(context, r);
+            },
+          ),
+        ),
+        const SizedBox(height: 16),
         ListTile(leading: const Icon(Icons.article_outlined), title: Text(s.t('logs')), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => LogsPage(s)))),
         ListTile(leading: const Icon(Icons.send_outlined), title: const Text('Telegram @V2rayAG'), subtitle: const Text(kTelegram), onTap: () => copyText(context, s, kTelegram)),
         ListTile(leading: const Icon(Icons.info_outline), title: Text(s.t('dev'))),
@@ -2087,6 +2299,11 @@ class LogsPage extends StatelessWidget {
         listenable: s,
         builder: (ctx, _) => Scaffold(
           appBar: AppBar(title: Text(s.t('logs')), actions: [
+            IconButton(
+              icon: const Icon(Icons.auto_awesome),
+              tooltip: s.t('aichat'),
+              onPressed: () => Navigator.push(ctx, MaterialPageRoute(builder: (_) => AiChatPage(s, attachment: s.logs.reversed.join('\n'), attachmentLabel: '${s.logs.length} ${s.t('logs')}'))),
+            ),
             IconButton(icon: const Icon(Icons.bug_report_outlined), tooltip: 'System log', onPressed: s.captureSystemLog),
             IconButton(icon: const Icon(Icons.copy), onPressed: () => copyText(ctx, s, s.logs.reversed.join('\n'))),
             IconButton(
@@ -2116,21 +2333,28 @@ class LogsPage extends StatelessWidget {
               final isFail = low.contains('failed') || low.contains('error');
               final isConn = !isFail && low.contains('connected') && !low.contains('disconnected');
               final tint = isFail ? Colors.redAccent : (isConn ? Colors.greenAccent : null);
-              return Container(
-                margin: const EdgeInsets.only(bottom: 6),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey),
-                  borderRadius: BorderRadius.circular(8),
-                  color: tint?.withOpacity(0.10),
+              // v1.0.7: tapping a log box opens the AI chat with
+              // exactly that line attached, and the AI starts
+              // explaining it in plain language right away.
+              return InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => Navigator.push(ctx, MaterialPageRoute(builder: (_) => AiChatPage(s, attachment: line, attachmentLabel: s.t('ailogline'), autoAsk: s.t('aiexplain_q')))),
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey),
+                    borderRadius: BorderRadius.circular(8),
+                    color: tint?.withOpacity(0.10),
+                  ),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    if (time.isNotEmpty) ...[
+                      Text(time, style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: Colors.grey)),
+                      const SizedBox(width: 10),
+                    ],
+                    Expanded(child: SelectableText(msg, style: const TextStyle(fontFamily: 'monospace', fontSize: 12))),
+                  ]),
                 ),
-                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  if (time.isNotEmpty) ...[
-                    Text(time, style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: Colors.grey)),
-                    const SizedBox(width: 10),
-                  ],
-                  Expanded(child: SelectableText(msg, style: const TextStyle(fontFamily: 'monospace', fontSize: 12))),
-                ]),
               );
             },
           ),
