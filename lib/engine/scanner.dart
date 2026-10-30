@@ -35,12 +35,15 @@ class ScanHit {
 
 /// Real TLS handshake with the given SNI, then GET /cdn-cgi/trace.
 /// A reply with "colo=" means the IP really serves Cloudflare traffic for you.
+/// v1.0.5: no certificate bypass — an IP whose certificate does not
+/// validate for the SNI is rejected like any other failed probe, so a
+/// spoofed or broken endpoint can never be picked as a fronting address.
 Future<ScanHit?> probeIp(String ip, String sni, {Duration timeout = const Duration(seconds: 4)}) async {
   final sw = Stopwatch()..start();
   Socket? raw;
   try {
     raw = await Socket.connect(ip, 443, timeout: timeout);
-    final s = await SecureSocket.secure(raw, host: sni, onBadCertificate: (_) => true).timeout(timeout);
+    final s = await SecureSocket.secure(raw, host: sni).timeout(timeout);
     s.write('GET /cdn-cgi/trace HTTP/1.1\r\nHost: $sni\r\nConnection: close\r\n\r\n');
     final body = await utf8.decoder.bind(s).join().timeout(timeout);
     final m = RegExp(r'colo=(\w+)').firstMatch(body);
@@ -121,7 +124,7 @@ Future<CdnHit?> probeCdn(String ip, String sni, {Duration timeout = const Durati
   Socket? raw;
   try {
     raw = await Socket.connect(ip, 443, timeout: timeout);
-    final s = await SecureSocket.secure(raw, host: sni, onBadCertificate: (_) => true).timeout(timeout);
+    final s = await SecureSocket.secure(raw, host: sni).timeout(timeout);
     raw = null;
     s.write('GET / HTTP/1.1\r\nHost: $sni\r\nUser-Agent: Mozilla/5.0\r\nAccept: */*\r\nConnection: close\r\n\r\n');
     final buf = StringBuffer();
@@ -153,7 +156,7 @@ Future<double?> speedVia(String ip, {String sni = 'speed.cloudflare.com'}) async
   var bytes = 0;
   try {
     raw = await Socket.connect(ip, 443, timeout: const Duration(seconds: 4));
-    final s = await SecureSocket.secure(raw, host: sni, onBadCertificate: (_) => true).timeout(const Duration(seconds: 4));
+    final s = await SecureSocket.secure(raw, host: sni).timeout(const Duration(seconds: 4));
     raw = null;
     s.write('GET /__down?bytes=3000000 HTTP/1.1\r\nHost: $sni\r\nConnection: close\r\n\r\n');
     try {

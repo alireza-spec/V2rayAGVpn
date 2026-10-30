@@ -67,7 +67,11 @@ Future<ProbeResult> probeLink(String link, {Duration timeout = const Duration(se
     }
     raw = await Socket.connect(addr, e.port, timeout: timeout);
     if (e.tls) {
-      final s = await SecureSocket.secure(raw, host: e.sni, onBadCertificate: (_) => true).timeout(timeout);
+      // v1.0.5: no certificate bypass — a config whose certificate
+      // does not validate gets a failed probe (-1) instead of a
+      // passing ping, so a broken or spoofed endpoint never looks
+      // healthy. The probe verdict never gates a connection by itself.
+      final s = await SecureSocket.secure(raw, host: e.sni).timeout(timeout);
       s.destroy();
       raw = null;
     }

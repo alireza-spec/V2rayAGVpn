@@ -381,15 +381,14 @@ class PsiphonEngine {
       if (light) {
         final ping = await _ping();
         if (ping > 0) {
-          final geo = await _lookupIp();
           _set(PsiphonState(
             phase: PsiphonPhase.connected,
             message: 'Connected',
             socksPort: _s.socksPort,
             httpPort: _s.httpPort,
-            exitIp: geo?['ip'] ?? _s.exitIp,
-            location: geo?['loc'] ?? _s.location,
-            region: (geo?['cc'] ?? '').isEmpty ? _s.region : geo?['cc'],
+            exitIp: _s.exitIp,
+            location: _s.location,
+            region: _s.region,
             pingMs: ping,
             connectedAt: _s.connectedAt ?? DateTime.now(),
             downSpeed: _s.downSpeed,
@@ -397,28 +396,34 @@ class PsiphonEngine {
             downTotal: _s.downTotal,
             upTotal: _s.upTotal,
           ));
+          _refreshGeo();
         }
         return;
       }
       for (var i = 0; i < 10 && _wanted; i++) {
         final ping = await _ping();
         if (ping > 0) {
-          final geo = await _lookupIp();
+          // v1.0.5: the verdict is the traffic proof, not the geo
+          // lookup — an IP lookup was never proof, and ip services
+          // can hang for seconds behind a tunnel. Report connected
+          // now (keeping any previously known location); the fresh
+          // location arrives in the background and updates the card.
           _set(PsiphonState(
             phase: PsiphonPhase.connected,
             message: 'Connected',
             socksPort: _s.socksPort,
             httpPort: _s.httpPort,
-            exitIp: geo?['ip'],
-            location: geo?['loc'],
-            region: (geo?['cc'] ?? '').isEmpty ? null : geo?['cc'],
+            exitIp: _s.exitIp,
+            location: _s.location,
+            region: _s.region,
             pingMs: ping,
             connectedAt: DateTime.now(),
           ));
-          log('Psiphon CONNECTED: exit ${geo?['ip'] ?? 'unknown'} (${geo?['loc'] ?? ''}), ping $ping ms');
+          log('Psiphon CONNECTED: ping $ping ms (location follows)');
           _tick?.cancel();
           _tick = Timer.periodic(const Duration(seconds: 20), (_) => _recheck());
           _startLive();
+          _refreshGeo();
           return;
         }
         await Future.delayed(const Duration(seconds: 1));
@@ -433,6 +438,34 @@ class PsiphonEngine {
     } finally {
       _verifying = false;
     }
+  }
+
+  /// Location lookup, off the connect path: when it lands on a still-
+  /// connected session, it fills exit IP / location / region on the
+  /// card (keeping live speeds and totals); it never delays or fails
+  /// the connection itself. The session's connectedAt pins the
+  /// lookup: if a new session started meanwhile, the stale answer
+  /// is dropped instead of overwriting the new session's location.
+  Future<void> _refreshGeo() async {
+    final at = _s.connectedAt;
+    final geo = await _lookupIp();
+    if (geo == null || !_wanted || _s.phase != PsiphonPhase.connected || _s.connectedAt != at) return;
+    final cur = _s;
+    _set(PsiphonState(
+      phase: cur.phase,
+      message: cur.message,
+      socksPort: cur.socksPort,
+      httpPort: cur.httpPort,
+      exitIp: geo['ip'],
+      location: geo['loc'],
+      region: (geo['cc'] ?? '').isEmpty ? cur.region : geo['cc'],
+      pingMs: cur.pingMs,
+      connectedAt: cur.connectedAt,
+      downSpeed: cur.downSpeed,
+      upSpeed: cur.upSpeed,
+      downTotal: cur.downTotal,
+      upTotal: cur.upTotal,
+    ));
   }
 
   void _startLive() {
@@ -512,7 +545,12 @@ class PsiphonEngine {
   }
 
   Future<int> _ping() async {
-    for (final u in ['http://cp.cloudflare.com/generate_204', 'http://connectivitycheck.gstatic.com/generate_204']) {
+    // v1.0.5: both endpoints are tried concurrently; the first
+    // positive answer (in the original URL order) wins. Same URLs
+    // and timeouts as before — only the waiting is parallel, so a
+    // slow first endpoint no longer delays the verdict by its full
+    // timeout.
+    Future<int> attempt(String u) async {
       final c = _client(const Duration(seconds: 4));
       final sw = Stopwatch()..start();
       try {
@@ -523,26 +561,46 @@ class PsiphonEngine {
       } finally {
         c.close(force: true);
       }
+      return -1;
+    }
+
+    final results = await Future.wait([
+      attempt('http://cp.cloudflare.com/generate_204'),
+      attempt('http://connectivitycheck.gstatic.com/generate_204'),
+    ]);
+    for (final p in results) {
+      if (p > 0) return p;
     }
     return -1;
   }
 
   Future<Map<String, String>?> _lookupIp() async {
-    for (final u in ['http://ip-api.com/json', 'https://ipwho.is/']) {
+    // v1.0.5: both sources are tried concurrently; the first valid
+    // answer wins. Same URLs and timeouts as before.
+    Future<Map<String, String>?> attempt(String u) async {
       final c = _client(const Duration(seconds: 5));
       try {
         final res = await (await c.getUrl(Uri.parse(u))).close().timeout(const Duration(seconds: 6));
         final j = jsonDecode(await res.transform(utf8.decoder).join());
-        if (j is! Map || j['success'] == false || j['status'] == 'fail') continue;
+        if (j is! Map || j['success'] == false || j['status'] == 'fail') return null;
         final ip = '${j['ip'] ?? j['query'] ?? ''}';
-        if (ip.isEmpty) continue;
+        if (ip.isEmpty) return null;
         final loc = [j['city'], j['country'] ?? j['country_name']].where((e) => e != null && '$e'.isNotEmpty).join(', ');
         final cc = '${j['countryCode'] ?? j['country_code'] ?? ''}';
         return {'ip': ip, 'loc': loc, 'cc': cc};
       } catch (_) {
+        return null;
       } finally {
         c.close(force: true);
       }
+    }
+
+    final results = await Future.wait([
+      attempt('http://ip-api.com/json'),
+      attempt('https://ipwho.is/'),
+    ]);
+    for (final r in results) {
+      if (r != null) return r;
     }
     return null;
   }

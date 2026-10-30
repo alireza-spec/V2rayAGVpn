@@ -96,10 +96,12 @@ ProviderSource _src(String raw) {
 }
 
 /// The five providers, their sources, and defaults, exactly as specified.
+/// v1.0.5: canonical order — Fast first, Update second, V2rayAG
+/// Exclusive third — so startup refresh (initAllProviders), the
+/// provider list and connect order all agree with the user's priority
+/// order. (The stored providerOrder migration already used this order;
+/// the built-in list now matches it too.)
 final List<ProviderDef> _fallbackProviders = [
-  const ProviderDef('v2rayag', 'V2rayAG Exclusive', true, 6, [
-    ProviderSource('https://raw.githubusercontent.com/alireza-spec/V2rayAGsub/main/sub.txt'),
-  ]),
   ProviderDef('fast', 'Fast', false, 24, [
     _src('https://api.jetnox.co/sub/87a4cabf-3290-4d46-8851-79213c1cadff'),
     _src('https://api.jetnox.co/sub/a09ff82b-984f-4777-a798-ecb7756f9bf1'),
@@ -116,6 +118,9 @@ final List<ProviderDef> _fallbackProviders = [
     _src('https://sub.namazvpn.workers.dev'),
     _src('https://bot.kahrobas.shop/sub.txt'),
     _src('https://gitverse.ru/api/repos/bikinitw22/apelsintel/raw/branch/main/alive_full.txt'),
+  ]),
+  const ProviderDef('v2rayag', 'V2rayAG Exclusive', true, 6, [
+    ProviderSource('https://raw.githubusercontent.com/alireza-spec/V2rayAGsub/main/sub.txt'),
   ]),
   ProviderDef('antifilter', 'Anti-Filter', false, 6, [
     _src('https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/verified/configs.txt'),

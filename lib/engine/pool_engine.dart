@@ -641,6 +641,9 @@ class PoolEngine {
     log('CONNECTED via ${c.remark}: ${_loc ?? ''}, ping $_delay ms${_pingOk ? '' : ', traffic NOT measured (strict check is off)'}');
     _startWatch();
     _emit();
+    // v1.0.5: location was decoupled from the verdict above; fill it
+    // in the background now that the session is connected.
+    if (p.geo == null) _refreshGeoInBackground(c.link);
   }
 
   /// Truth test, in order:
@@ -666,15 +669,20 @@ class PoolEngine {
         if (d > 0) ping = d;
       }
       if (ping > 0) {
-        final geo = await _lookupIp();
         if (_proxyPort != null) {
           final socks = await _portOpen(10808);
           _proxyInfo = 'HTTP 127.0.0.1:$_proxyPort${socks ? '  SOCKS5 127.0.0.1:10808' : ''}';
         }
-        return _Proof(true, true, geo, ping);
+        // v1.0.5: the verdict is the traffic proof. The geo lookup
+        // was never proof (see the doc comment above) and ip
+        // services can hang for seconds behind a tunnel, so it no
+        // longer blocks "Connected": _finish triggers it in the
+        // background and it fills ip/location on the card when it
+        // lands.
+        return _Proof(true, true, null, ping);
       }
       if (!strictVerify && !proxyOnly) {
-        return _Proof(true, true, await _lookupIp(), -1);
+        return _Proof(true, true, null, -1);
       }
       await Future.delayed(const Duration(seconds: 1));
     }
@@ -686,6 +694,21 @@ class PoolEngine {
       log('${c.remark}: the VPN is up but this server carried no traffic');
     }
     return _Proof(false, vpn != false, null, -1);
+  }
+
+  /// Location lookup, off the connect path: when it lands on a still-
+  /// connected session, it fills ip/location and re-emits; it never
+  /// delays or fails the connection itself. [link] pins the lookup
+  /// to the session that requested it: if a failover already moved
+  /// to another server, the stale answer is dropped instead of
+  /// overwriting the new session's location.
+  Future<void> _refreshGeoInBackground(String link) async {
+    final geo = await _lookupIp();
+    if (geo == null || !_wanted || _phase != Phase.connected || _cur?.link != link) return;
+    _ip = geo['ip'];
+    _loc = '${flagOf(geo['cc'] ?? '')} ${geo['loc'] ?? ''}'.trim();
+    log('Location: $_loc');
+    _emit();
   }
 
   Future<bool> _portOpen(int port) async {
@@ -718,7 +741,9 @@ class PoolEngine {
   }
 
   Future<int> _ping1() async {
-    for (final u in _testUrls) {
+    // v1.0.5: all test endpoints are tried concurrently; the first
+    // positive answer wins. Same URLs and timeouts as before.
+    Future<int> attempt(String u) async {
       final c = _client(const Duration(seconds: 3));
       final sw = Stopwatch()..start();
       try {
@@ -729,6 +754,12 @@ class PoolEngine {
       } finally {
         c.close(force: true);
       }
+      return -1;
+    }
+
+    final results = await Future.wait(_testUrls.map(attempt));
+    for (final r in results) {
+      if (r > 0) return r;
     }
     return -1;
   }
@@ -737,7 +768,12 @@ class PoolEngine {
   /// Tries the user's test URL first, then the built-in fallbacks, and reports the
   /// median of the probes on the first endpoint that answers.
   Future<int> measurePing() async {
-    for (final url in _testUrls) {
+    // v1.0.5: all test endpoints are probed concurrently; the first
+    // endpoint (in the user's configured order) that answers wins,
+    // with the same median math as before. Same URLs, same timeouts
+    // — only the waiting is parallel, so one dead endpoint no longer
+    // costs its full timeout before the next is tried.
+    Future<int> attempt(String url) async {
       final c = _client(const Duration(seconds: 4));
       final t = <int>[];
       try {
@@ -751,10 +787,14 @@ class PoolEngine {
       } finally {
         c.close(force: true);
       }
-      if (t.isNotEmpty) {
-        t.sort();
-        return t[t.length ~/ 2];
-      }
+      if (t.isEmpty) return -1;
+      t.sort();
+      return t[t.length ~/ 2];
+    }
+
+    final results = await Future.wait(_testUrls.map(attempt));
+    for (final r in results) {
+      if (r > 0) return r;
     }
     return -1;
   }
@@ -1057,22 +1097,30 @@ class PoolEngine {
 
   /// Public IP and place, looked up by IP address. [direct] skips the core's proxy.
   Future<Map<String, String>?> _lookupIp({bool direct = false}) async {
+    // v1.0.5: all sources are tried concurrently; the first valid
+    // answer wins. Same URLs and timeouts as before.
     const urls = ['http://ip-api.com/json', 'https://ipwho.is/', 'https://ipinfo.io/json', 'https://api.ipify.org?format=json'];
-    for (final u in urls) {
+    Future<Map<String, String>?> attempt(String u) async {
       final c = direct ? (HttpClient()..connectionTimeout = const Duration(seconds: 4)) : _client(const Duration(seconds: 4));
       try {
         final res = await (await c.getUrl(Uri.parse(u))).close().timeout(const Duration(seconds: 5));
         final j = jsonDecode(await res.transform(utf8.decoder).join());
-        if (j is! Map || j['success'] == false || j['status'] == 'fail') continue;
+        if (j is! Map || j['success'] == false || j['status'] == 'fail') return null;
         final ip = '${j['ip'] ?? j['query'] ?? ''}';
-        if (ip.isEmpty) continue;
+        if (ip.isEmpty) return null;
         final loc = [j['city'], j['country'] ?? j['country_name']].where((e) => e != null && '$e'.isNotEmpty).join(', ');
         final cc = '${j['countryCode'] ?? j['country_code'] ?? (('${j['country']}'.length == 2) ? j['country'] : '')}';
         return {'ip': ip, 'loc': loc, 'cc': cc};
       } catch (_) {
+        return null;
       } finally {
         c.close(force: true);
       }
+    }
+
+    final results = await Future.wait(urls.map(attempt));
+    for (final r in results) {
+      if (r != null) return r;
     }
     return null;
   }
