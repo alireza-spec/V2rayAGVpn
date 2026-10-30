@@ -30,4 +30,14 @@ void main() {
       expect(chooseFrom(c, Random(i)).delayMs! <= 125, true);
     }
   });
+  test('withIpv6Dns adds queryStrategy, keeps servers, never breaks input', () {
+    final patched = jsonDecode(withIpv6Dns('{"outbounds":[]}')) as Map<String, dynamic>;
+    expect(patched['dns']['queryStrategy'], 'UseIPv6');
+    expect(patched['dns']['servers'], ['1.1.1.1']);
+    final kept = jsonDecode(withIpv6Dns('{"dns":{"servers":["8.8.8.8"]}}')) as Map<String, dynamic>;
+    expect(kept['dns']['queryStrategy'], 'UseIPv6');
+    expect(kept['dns']['servers'], ['8.8.8.8']);
+    expect(withIpv6Dns('not json'), 'not json');
+    expect(withIpv6Dns('[1,2]'), '[1,2]');
+  });
 }
