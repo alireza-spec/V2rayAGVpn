@@ -1,0 +1,390 @@
+// Network tools (v1.0.6): DNS latency, domain reachability and a
+// vless/trojan address modifier, inspired by the feature set of the
+// network-checker app (mirarr-app/network-checker) but implemented
+// here from scratch, in this app's own style, with no extra packages:
+// plain dart:io (UDP DNS, HTTPS checks, string surgery). They live in
+// Tools so a separate checker app is not needed. All three test
+// through the current connection: with the VPN on, everything
+// answers through the tunnel; with it off, they show the bare
+// network, which is the interesting case.
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../app/store.dart';
+
+class _DnsEntry {
+  final String name, ip;
+  const _DnsEntry(this.name, this.ip);
+}
+
+const _dnsProviders = [
+  _DnsEntry('Cloudflare', '1.1.1.1'),
+  _DnsEntry('Google', '8.8.8.8'),
+  _DnsEntry('Quad9', '9.9.9.9'),
+  _DnsEntry('OpenDNS', '208.67.222.222'),
+  _DnsEntry('AdGuard', '94.140.14.14'),
+  _DnsEntry('Shecan', '178.22.122.100'),
+];
+
+/// One minimal DNS query (A record for example.com) over UDP, timed.
+/// Returns milliseconds, or null on timeout / bad reply. Two attempts,
+/// best wins; the caller runs providers concurrently.
+Future<int?> _dnsQuery(String ip) async {
+  for (var attempt = 0; attempt < 2; attempt++) {
+    final ms = await _dnsOnce(ip);
+    if (ms != null) return ms;
+  }
+  return null;
+}
+
+Future<int?> _dnsOnce(String ip) async {
+  RawDatagramSocket? sock;
+  try {
+    sock = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0).timeout(const Duration(seconds: 3));
+    final id = math.Random().nextInt(65536);
+    final q = <int>[
+      id >> 8, id & 0xFF, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      7, ...utf8.encode('example'), 3, ...utf8.encode('com'), 0, 0x00, 0x01, 0x00, 0x01,
+    ];
+    final sw = Stopwatch()..start();
+    sock.send(q, InternetAddress(ip), 53);
+    final done = Completer<int?>();
+    final timer = Timer(const Duration(seconds: 3), () {
+      if (!done.isCompleted) done.complete(null);
+    });
+    late StreamSubscription sub;
+    sub = sock.listen((e) {
+      if (e == RawSocketEvent.read) {
+        final d = sock?.receive();
+        if (d != null && d.data.length >= 12 && d.data[0] == (id >> 8) && d.data[1] == (id & 0xFF) && (d.data[2] & 0x80) != 0) {
+          if (!done.isCompleted) done.complete(sw.elapsedMilliseconds);
+        }
+      }
+    });
+    final r = await done.future;
+    timer.cancel();
+    await sub.cancel();
+    return r;
+  } catch (_) {
+    return null;
+  } finally {
+    sock?.close();
+  }
+}
+
+class DnsTestPage extends StatefulWidget {
+  const DnsTestPage(this.s, {super.key});
+  final Store s;
+  @override
+  State<DnsTestPage> createState() => _DnsTestState();
+}
+
+class _DnsTestState extends State<DnsTestPage> {
+  final customCtl = TextEditingController();
+  final entries = <_DnsEntry>[..._dnsProviders];
+  final results = <String, int>{};
+  bool testing = false;
+
+  Future<void> _testAll() async {
+    setState(() {
+      testing = true;
+      results.clear();
+    });
+    final found = await Future.wait(entries.map((e) async {
+      final ms = await _dnsQuery(e.ip);
+      return MapEntry(e.ip, ms ?? -1);
+    }));
+    if (!mounted) return;
+    setState(() {
+      for (final f in found) {
+        results[f.key] = f.value;
+      }
+      testing = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.s;
+    final rows = [...entries];
+    rows.sort((a, b) {
+      final ma = results[a.ip], mb = results[b.ip];
+      if (ma == null && mb == null) return 0;
+      if (ma == null) return 1;
+      if (mb == null) return -1;
+      if (ma < 0 && mb < 0) return 0;
+      if (ma < 0) return 1;
+      if (mb < 0) return -1;
+      return ma.compareTo(mb);
+    });
+    return Scaffold(
+      appBar: AppBar(title: Text(s.t('dnstest'))),
+      body: ListView(padding: const EdgeInsets.all(16), children: [
+        Text(s.t('dnstest_d'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(child: TextField(controller: customCtl, decoration: InputDecoration(labelText: s.t('customdns'), border: const OutlineInputBorder()))),
+          const SizedBox(width: 8),
+          FilledButton(
+            onPressed: () {
+              final v = customCtl.text.trim();
+              if (v.isEmpty || entries.any((e) => e.ip == v)) return;
+              setState(() {
+                entries.add(_DnsEntry(v, v));
+                customCtl.clear();
+              });
+            },
+            child: Text(s.t('addcustom')),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        FilledButton.icon(icon: const Icon(Icons.speed), label: Text(testing ? '...' : s.t('test')), onPressed: testing ? null : _testAll),
+        const SizedBox(height: 12),
+        for (final e in rows)
+          ListTile(
+            dense: true,
+            title: Text(e.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+            subtitle: Text(e.ip),
+            trailing: results[e.ip] == null
+                ? null
+                : Text(
+                    results[e.ip]! < 0 ? s.t('noreply') : '${results[e.ip]} ms',
+                    style: TextStyle(color: results[e.ip]! < 0 ? Colors.redAccent : (results[e.ip]! < 200 ? const Color(0xFF2BD67B) : (results[e.ip]! < 500 ? Colors.amber : Colors.orange))),
+                  ),
+          ),
+      ]),
+    );
+  }
+}
+
+class _DomResult {
+  final bool ok;
+  final int ms;
+  final int? code;
+  const _DomResult(this.ok, this.ms, this.code);
+}
+
+const _defaultDomains = [
+  'google.com',
+  'youtube.com',
+  'telegram.org',
+  'instagram.com',
+  'x.com',
+  'whatsapp.com',
+  'facebook.com',
+  'wikipedia.org',
+  'github.com',
+  'cloudflare.com',
+  'apple.com',
+  'microsoft.com',
+];
+
+Future<_DomResult> _checkDomain(String d) async {
+  final c = HttpClient()..connectionTimeout = const Duration(seconds: 3);
+  final sw = Stopwatch()..start();
+  try {
+    final req = await c.getUrl(Uri.parse('https://$d/'));
+    final res = await req.close().timeout(const Duration(seconds: 6));
+    await res.drain();
+    return _DomResult(true, sw.elapsedMilliseconds, res.statusCode);
+  } catch (_) {
+    return const _DomResult(false, -1, null);
+  } finally {
+    c.close(force: true);
+  }
+}
+
+class DomainCheckPage extends StatefulWidget {
+  const DomainCheckPage(this.s, {super.key});
+  final Store s;
+  @override
+  State<DomainCheckPage> createState() => _DomainCheckState();
+}
+
+class _DomainCheckState extends State<DomainCheckPage> {
+  final customCtl = TextEditingController();
+  final domains = <String>[..._defaultDomains];
+  final results = <String, _DomResult>{};
+  bool testing = false;
+
+  Future<void> _testAll() async {
+    setState(() {
+      testing = true;
+      results.clear();
+    });
+    final found = await Future.wait(domains.map((d) async => MapEntry(d, await _checkDomain(d))));
+    if (!mounted) return;
+    setState(() {
+      for (final f in found) {
+        results[f.key] = f.value;
+      }
+      testing = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.s;
+    final rows = [...domains];
+    rows.sort((a, b) {
+      final ra = results[a], rb = results[b];
+      if (ra == null && rb == null) return 0;
+      if (ra == null) return 1;
+      if (rb == null) return -1;
+      if (ra.ok != rb.ok) return ra.ok ? -1 : 1;
+      return ra.ms.compareTo(rb.ms);
+    });
+    return Scaffold(
+      appBar: AppBar(title: Text(s.t('domaincheck'))),
+      body: ListView(padding: const EdgeInsets.all(16), children: [
+        Text(s.t('domaincheck_d'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(child: TextField(controller: customCtl, decoration: InputDecoration(labelText: s.t('customdomain'), border: const OutlineInputBorder()))),
+          const SizedBox(width: 8),
+          FilledButton(
+            onPressed: () {
+              final v = customCtl.text.trim().toLowerCase().replaceAll(RegExp(r'^https?://'), '').split('/').first;
+              if (v.isEmpty || domains.contains(v)) return;
+              setState(() {
+                domains.add(v);
+                customCtl.clear();
+              });
+            },
+            child: Text(s.t('addcustom')),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        FilledButton.icon(icon: const Icon(Icons.language_outlined), label: Text(testing ? '...' : s.t('test')), onPressed: testing ? null : _testAll),
+        const SizedBox(height: 12),
+        for (final d in rows)
+          ListTile(
+            dense: true,
+            title: Text(d, style: const TextStyle(fontWeight: FontWeight.w700)),
+            trailing: results[d] == null
+                ? null
+                : Text(
+                    results[d]!.ok ? '${s.t('reachable')} ${results[d]!.ms} ms' : s.t('blocked'),
+                    style: TextStyle(color: results[d]!.ok ? const Color(0xFF2BD67B) : Colors.redAccent),
+                  ),
+          ),
+      ]),
+    );
+  }
+}
+
+/// Expands one-per-line IPs, dash ranges (a-b) and CIDR blocks into
+/// individual IPv4 addresses, capped at 256 (a /24 is 254 hosts; a
+/// careless /16 would otherwise produce 65k configs).
+List<String> _expandIps(String input) {
+  final out = <String>[];
+  final ipRe = RegExp(r'^\d{1,3}(\.\d{1,3}){3}$');
+  int? parseIp(String v) {
+    if (!ipRe.hasMatch(v)) return null;
+    final p = v.split('.').map(int.tryParse).toList();
+    if (p.any((e) => e == null || e > 255)) return null;
+    return (p[0]! << 24) | (p[1]! << 16) | (p[2]! << 8) | p[3]!;
+  }
+
+  String fmt(int v) => '${(v >> 24) & 0xFF}.${(v >> 16) & 0xFF}.${(v >> 8) & 0xFF}.${v & 0xFF}';
+  for (final token in input.split(RegExp(r'[\s,;]+')).where((e) => e.isNotEmpty)) {
+    if (out.length >= 256) break;
+    if (token.contains('/')) {
+      final parts = token.split('/');
+      final base = parseIp(parts[0]);
+      final prefix = parts.length > 1 ? int.tryParse(parts[1]) : null;
+      if (base == null || prefix == null || prefix < 24 || prefix > 32) continue;
+      final count = 1 << (32 - prefix);
+      final mask = 0xFFFFFFFF << (32 - prefix);
+      final net = base & mask;
+      final start = count > 2 ? 1 : 0;
+      final end = count > 2 ? count - 1 : count;
+      for (var i = start; i < end && out.length < 256; i++) {
+        out.add(fmt(net + i));
+      }
+      continue;
+    }
+    if (token.contains('-')) {
+      final parts = token.split('-');
+      if (parts.length != 2) continue;
+      final a = parseIp(parts[0].trim());
+      final b = parseIp(parts[1].trim());
+      if (a == null || b == null || b < a) continue;
+      for (var v = a; v <= b && out.length < 256; v++) {
+        out.add(fmt(v));
+      }
+      continue;
+    }
+    if (parseIp(token) != null) out.add(token);
+  }
+  return out;
+}
+
+class VlessModifierPage extends StatefulWidget {
+  const VlessModifierPage(this.s, {super.key});
+  final Store s;
+  @override
+  State<VlessModifierPage> createState() => _VlessModifierState();
+}
+
+class _VlessModifierState extends State<VlessModifierPage> {
+  final cfgCtl = TextEditingController();
+  final ipsCtl = TextEditingController();
+  List<String> outputs = [];
+  String note = '';
+
+  void _generate() {
+    final s = widget.s;
+    final cfg = cfgCtl.text.trim();
+    final u = Uri.tryParse(cfg);
+    if (cfg.isEmpty || u == null || (u.scheme != 'vless' && u.scheme != 'trojan')) {
+      setState(() {
+        outputs = [];
+        note = s.t('invalidconfig');
+      });
+      return;
+    }
+    final ips = _expandIps(ipsCtl.text);
+    setState(() {
+      outputs = ips.map((ip) => u.replace(host: ip).toString()).toList();
+      note = '${outputs.length} ${s.t('configs')}';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.s;
+    return Scaffold(
+      appBar: AppBar(title: Text(s.t('vlessmod'))),
+      body: ListView(padding: const EdgeInsets.all(16), children: [
+        Text(s.t('vlessmod_d'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+        const SizedBox(height: 12),
+        TextField(controller: cfgCtl, minLines: 3, maxLines: 6, decoration: InputDecoration(labelText: s.t('pasteconfig'), border: const OutlineInputBorder())),
+        const SizedBox(height: 12),
+        TextField(controller: ipsCtl, minLines: 3, maxLines: 6, decoration: InputDecoration(labelText: s.t('iplist'), border: const OutlineInputBorder())),
+        const SizedBox(height: 12),
+        FilledButton.icon(icon: const Icon(Icons.swap_horiz_outlined), label: Text(s.t('generate')), onPressed: _generate),
+        if (note.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 12), child: Text(note, style: const TextStyle(fontWeight: FontWeight.w700))),
+        if (outputs.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.copy, size: 18),
+            label: Text(s.t('copy')),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: outputs.join('\n')));
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s.t('copy'))));
+            },
+          ),
+          const SizedBox(height: 8),
+          SelectableText(outputs.join('\n'), style: const TextStyle(fontSize: 12)),
+        ],
+      ]),
+    );
+  }
+}

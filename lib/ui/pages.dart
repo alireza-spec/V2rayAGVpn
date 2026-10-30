@@ -10,10 +10,10 @@ import 'package:file_picker/file_picker.dart';
 import '../app/store.dart';
 import '../engine/native.dart';
 import '../engine/pool_engine.dart';
-import '../engine/providers.dart';
 import '../engine/psiphon_engine.dart';
 import '../engine/scanner.dart';
 import 'logo.dart';
+import 'net_tools.dart';
 import 'speed_page.dart';
 
 const kTelegram = 'https://t.me/V2rayAG';
@@ -123,13 +123,26 @@ class Shell extends StatelessWidget {
             ),
             drawer: Drawer(
               child: SafeArea(
-                child: StreamBuilder<EngineState>(
-                  stream: s.engine.states,
-                  initialData: s.engine.state,
-                  builder: (_, snap) {
-                    final e = snap.data!;
-                    final on = e.phase == Phase.connected;
-                    final busy = e.phase == Phase.searching || e.phase == Phase.testing || e.phase == Phase.connecting || e.phase == Phase.switching;
+                child: ListenableBuilder(
+                  listenable: s,
+                  builder: (_, __) {
+                    // v1.0.6: the drawer status covers every path, not
+                    // just the core engine — Psiphon, Psiphon+V2ray
+                    // combo, and core modes (Smart/Auto/CDN/Personal).
+                    // The store notifies on Psiphon state changes, so
+                    // this rebuilds when the tunnel connects, while the
+                    // inner stream still feeds live engine values.
+                    final psi = s.psiphon.state;
+                    final psiOn = psi.phase == PsiphonPhase.connected && !s.psiComboBusy;
+                    final combo = s.psiComboActive;
+                    return StreamBuilder<EngineState>(
+                      stream: s.engine.states,
+                      initialData: s.engine.state,
+                      builder: (_, snap) {
+                        final e = snap.data!;
+                        final engOn = e.phase == Phase.connected;
+                        final on = combo || psiOn || engOn;
+                        final busy = !on && (e.phase == Phase.searching || e.phase == Phase.testing || e.phase == Phase.connecting || e.phase == Phase.switching || psi.phase == PsiphonPhase.connecting || s.psiComboBusy);
                     final accent = Theme.of(ctx).colorScheme.primary;
                     final color = on ? const Color(0xFF2BD67B) : (busy ? const Color(0xFF4DA3FF) : Colors.grey);
                     Widget item(IconData ic, String label, VoidCallback f, {int? tab}) => ListTile(
@@ -167,9 +180,9 @@ class Shell extends StatelessWidget {
                               const SizedBox(width: 10),
                               Expanded(
                                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                  Text(on ? s.t('connected') : (busy ? e.message : s.t('notconn')), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 12, letterSpacing: 1)),
-                                  if (on) Text('${e.configName ?? ''}   ${fmtDur(e.traffic.durationSec)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11)),
-                                  if (on && (e.location ?? '').isNotEmpty) Text(e.location!, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                                  Text(on ? (combo ? s.t('drawer_combo') : (psiOn ? s.t('drawer_psi') : s.t('connected'))) : (busy ? (psi.phase == PsiphonPhase.connecting || s.psiComboBusy ? psi.message : e.message) : s.t('notconn')), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 12, letterSpacing: 1)),
+                                  if (on) Text(combo || engOn ? '${e.configName ?? ''}   ${fmtDur(e.traffic.durationSec)}' : '${psi.exitIp ?? ''}   ${psi.connectedAt == null ? '00:00:00' : fmtDur(DateTime.now().difference(psi.connectedAt!).inSeconds)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11)),
+                                  if (on && ((combo || engOn) ? (e.location ?? '').isNotEmpty : (psi.location ?? '').isNotEmpty)) Text(combo || engOn ? e.location! : psi.location!, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.grey)),
                                 ]),
                               ),
                             ]),
@@ -273,6 +286,8 @@ class Shell extends StatelessWidget {
                       ),
                       Padding(padding: const EdgeInsets.all(10), child: Text('V2rayAG  build $kBuildNum', style: const TextStyle(fontSize: 11, color: Colors.grey))),
                     ]);
+                      },
+                    );
                   },
                 ),
               ),
@@ -307,10 +322,12 @@ class HomePage extends StatelessWidget {
               onTap: locked
                   ? null
                   : () {
-                      if (m == 'cdn') {
-                        Navigator.push(ctx, MaterialPageRoute(builder: (_) => CdnPage(s)));
-                        return;
-                      }
+                      // v1.0.6: the CDN chip switches to the CDN tab
+                      // like every other mode (tap chip, tap power to
+                      // connect). Its fields live on the CDN setup
+                      // page, reached from the tab's setup button.
+                      // CDN is core fronting, not Psiphon, so its
+                      // settings do not belong in Psiphon settings.
                       if (m == 'psiphon') {
                         // v45: tapping Psiphon only switches to Psiphon mode.
                         // It must NOT start connecting by itself: like every
@@ -401,7 +418,8 @@ class HomePage extends StatelessWidget {
             _modes(ctx, on || busy),
             const SizedBox(height: 10),
             Text(s.t('${s.mode}_d'), textAlign: TextAlign.center, style: grey),
-            if (s.mode == 'cdn') Text('${s.t('pool')}: ${s.pool.length}', textAlign: TextAlign.center, style: grey.copyWith(fontSize: 12)),
+            if (s.mode == 'cdn') Text(s.cdnUsingProviderFallback ? '${s.t('cdnfromproviders')}: ${s.cdnCandidateCount}' : (s.cdnLinks.isNotEmpty ? '${s.t('cdnconfigs')}: ${s.cdnLinks.length}' : '${s.t('pool')}: ${s.pool.length}'), textAlign: TextAlign.center, style: grey.copyWith(fontSize: 12)),
+            if (s.mode == 'cdn') Center(child: TextButton.icon(icon: const Icon(Icons.settings_outlined, size: 16), label: Text(s.t('cdnsetup'), style: const TextStyle(fontSize: 12)), onPressed: on || busy ? null : () => Navigator.push(ctx, MaterialPageRoute(builder: (_) => CdnPage(s))))),
             if (s.mode == 'auto' || s.mode == 'smart') ProvidersPanel(s: s, locked: on || busy),
             Center(
               child: PowerButton(
@@ -523,7 +541,7 @@ class HomePage extends StatelessWidget {
             ),
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text('Attempts: #${s.psiphonAttempts}', textAlign: TextAlign.center, style: const TextStyle(color: Colors.grey, fontSize: 13)),
+              child: Text('${s.t('psi_attempts_total')}: #${s.psiphonAttempts}', textAlign: TextAlign.center, style: const TextStyle(color: Colors.grey, fontSize: 13)),
             ),
             if (e.phase == PsiphonPhase.needsConfig || e.phase == PsiphonPhase.failed)
               Padding(
@@ -1784,6 +1802,16 @@ class _ToolsState extends State<ToolsPage> {
       const SizedBox(height: 8),
       OutlinedButton.icon(icon: const Icon(Icons.public), label: Text(s.t('myip')), onPressed: _myIp),
       if (myIp.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 8), child: Text(myIp)),
+      const Divider(height: 32),
+      Text(s.t('nettools'), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+      const SizedBox(height: 4),
+      Text(s.t('nettools_d'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+      const SizedBox(height: 8),
+      OutlinedButton.icon(icon: const Icon(Icons.dns_outlined), label: Text(s.t('dnstest')), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => DnsTestPage(s)))),
+      const SizedBox(height: 8),
+      OutlinedButton.icon(icon: const Icon(Icons.language_outlined), label: Text(s.t('domaincheck')), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => DomainCheckPage(s)))),
+      const SizedBox(height: 8),
+      OutlinedButton.icon(icon: const Icon(Icons.swap_horiz_outlined), label: Text(s.t('vlessmod')), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => VlessModifierPage(s)))),
     ]);
   }
 }
