@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart' show compute;
 import '../engine/fronting.dart';
 import '../engine/native.dart';
 import '../engine/pool_engine.dart';
+import '../engine/share_relay.dart';
 import '../engine/speed_test.dart';
 import '../engine/psiphon_engine.dart';
 import '../engine/providers.dart';
@@ -243,6 +244,79 @@ const _tr = <String, List<String>>{
   'cancel': ['Cancel', 'انصراف'],
   'ok': ['OK', 'تأیید'],
   'link': ['Subscription link', 'لینک اشتراک'],
+  // v1.0.7
+  'copyaddr': ['Copy address', 'کپی آدرس'],
+  'detecting': ['Detecting…', 'در حال تشخیص…'],
+  'cat_fronting': ['CDN fronting', 'فرانتینگ CDN'],
+  'cat_fronting_d': ['Your clean IP and front host for CDN mode.', 'آی‌پی تمیز و هاست فرانت شما برای حالت CDN.'],
+  'cat_scan': ['IP scanner', 'اسکنر آی‌پی'],
+  'cat_scan_d': ['Finds clean, fast IPs on your own network.', 'آی‌پی‌های تمیز و سریع را روی اینترنت خودتان پیدا می‌کند.'],
+  'cat_hosts': ['Host / SNI finder', 'یابنده هاست / SNI'],
+  'cat_hosts_d': ['Tests which hosts work as a fronting SNI on your operator. Only hosts that answer Cloudflare pass.', 'تست می‌کند کدام هاست‌ها روی اپراتور شما به‌عنوان SNI فرانت کار می‌کنند. فقط هاست‌هایی که به کلادفلر جواب بدهند قبول می‌شوند.'],
+  'cat_checks': ['Connection checks', 'بررسی‌های اتصال'],
+  'cat_checks_d': ['Quick self-tests and your current IP.', 'تست‌های سریع خودکار و آی‌پی فعلی شما.'],
+  'cat_net': ['Network tools', 'ابزارهای شبکه'],
+  'cat_net_d': ['DNS speed, domain reachability and config editing.', 'سرعت DNS، دسترسی دامین‌ها و ویرایش کانفیگ.'],
+  'hostgrid_d': ['Tap a host to use it as the front host. Green = works on your network, red = no reply.', 'برای استفاده به‌عنوان هاست فرانت روی یک هاست بزنید. سبز یعنی روی شبکه شما کار می‌کند، قرمز یعنی جواب نداد.'],
+  'importfile': ['Import .txt file', 'وارد کردن فایل txt'],
+  'copyhealthy': ['Copy healthy', 'کپی سالم‌ها'],
+  'copyworking': ['Copy working', 'کپی موارد سالم'],
+  'importips': ['Import IPs (.txt)', 'وارد کردن آی‌پی‌ها (txt)'],
+  'importdomains': ['Import domains (.txt)', 'وارد کردن دامین‌ها (txt)'],
+  'importdns': ['Import DNS (.txt)', 'وارد کردن DNS (txt)'],
+  'testimported': ['Test imported', 'تست واردشده‌ها'],
+  'ipv6': ['IPv6 DNS', 'DNS نسخه ۶'],
+  'ipv6_h': ['When on, core-mode configs resolve domains preferring IPv6 (Xray queryStrategy UseIPv6). Off = today\'s behavior. Core modes only, never Psiphon; configs with a literal IP are unaffected.', 'وقتی روشن باشد، کانفیگ‌های حالت‌های اصلی دامین‌ها را با اولویت IPv6 resolve می‌کنند (queryStrategy UseIPv6 در Xray). خاموش = رفتار امروز. فقط حالت‌های اصلی، هرگز سایفون؛ کانفیگ‌هایی که آی‌پی مستقیم دارند تأثیری نمی‌گیرند.'],
+  'sharevpn': ['Share VPN', 'اشتراک‌گذاری VPN'],
+  'sharenotconn': ['Connect first, then share.', 'اول وصل شوید، بعد اشتراک بگذارید.'],
+  'shareunavail': ['No shareable local proxy found. In VPN mode the local proxy needs credentials only the system knows, so sharing needs Proxy mode: switch the connection type to Proxy and reconnect, then start sharing.', 'پروکسی محلی قابل اشتراک پیدا نشد. در حالت VPN پروکسی محلی به رمزهایی نیاز دارد که فقط سیستم می‌داند، پس اشتراک‌گذاری به حالت پروکسی نیاز دارد: نوع اتصال را به پروکسی تغییر بدهید و دوباره وصل شوید، بعد اشتراک را شروع کنید.'],
+  'sharefailed': ['Sharing failed:', 'اشتراک‌گذاری ناموفق بود:'],
+  'sharewarn': ['Warning: anyone on the same Wi-Fi or hotspot can use your tunnel while sharing is on. Sharing stops the moment you disconnect.', 'هشدار: هر کسی که روی همان وای‌فای یا هات‌اسپات باشد، تا وقتی اشتراک روشن است می‌تواند از تونل شما استفاده کند. اشتراک با قطع اتصال شما متوقف می‌شود.'],
+  'sharestart': ['Start sharing', 'شروع اشتراک‌گذاری'],
+  'sharestop': ['Stop sharing', 'توقف اشتراک‌گذاری'],
+  'shareaddr': ['Share address', 'آدرس اشتراک'],
+  'sharecopy': ['Copy share address', 'کپی آدرس اشتراک'],
+  'sharevia': ['Sharing via', 'اشتراک از طریق'],
+  'sharejoin': ['Join a shared VPN', 'وصل شدن به VPN اشتراکی'],
+  'sharejoin_d': ['Enter the address someone sharing their VPN gave you. No subscription or config of your own is needed.', 'آدرسی را که کسی که VPN خودش را به اشتراک گذاشته به شما داده وارد کنید. به اشتراک یا کانفیگ خودتان نیازی نیست.'],
+  'sharehost': ['Sharer IP', 'آیپی اشتراک‌گذارنده'],
+  'shareport': ['Port', 'پورت'],
+  'shareuser': ['Username (optional)', 'نام کاربری (اختیاری)'],
+  'sharepass': ['Password (optional)', 'رمز (اختیاری)'],
+  'shareconnect': ['Connect via shared proxy', 'اتصال از طریق پروکسی اشتراکی'],
+  'shareinfo': ['How sharing works', 'اشتراک‌گذاری چطور کار می‌کند'],
+  'shareswitchproxy': ['Switch to Proxy mode and reconnect', 'تغییر به حالت پروکسی و اتصال دوباره'],
+  'shareswitchproxy_d': ['Sharing needs Proxy mode (in VPN mode the local proxy is locked). This disconnects and reconnects in Proxy mode; start sharing afterwards.', 'اشتراک‌گذاری به حالت پروکسی نیاز دارد (در حالت VPN پروکسی محلی قفل است). این کار اتصال را قطع و در حالت پروکسی دوباره وصل می‌کند؛ بعد از آن اشتراک را شروع کنید.'],
+  'shareinfo1': ['Shared Wi-Fi: both phones on the same Wi-Fi. The sharer connects V2rayAG (Proxy mode) and starts sharing; the joiner enters the sharer\'s IP and port in this page (or as a SOCKS5 proxy in another app) and connects. The joiner\'s traffic then rides the sharer\'s tunnel.', 'وای‌فای مشترک: هر دو گوشی روی یک وای‌فای باشند. اشتراک‌گذارنده V2rayAG را (در حالت پروکسی) وصل می‌کند و اشتراک را شروع می‌کند؛ وصل‌شونده آیپی و پورت او را در همین صفحه (یا به‌عنوان پروکسی SOCKS5 در اپ دیگر) وارد می‌کند و وصل می‌شود. ترافیک وصل‌شونده بعد از تونل اشتراک‌گذارنده رد می‌شود.'],
+  'shareinfo2': ['Hotspot: the sharer turns on the phone hotspot and connects V2rayAG (Proxy mode). The joiner joins the hotspot, then enters the sharer\'s hotspot IP (usually 192.168.43.1) and the share port here and connects. Note: Android hotspot clients bypass the sharer\'s VPN by default — that is exactly why the joiner must set the proxy; without it, the joiner is NOT tunneled.', 'هات‌اسپات: اشتراک‌گذارنده هات‌اسپات گوشی را روشن و V2rayAG را (در حالت پروکسی) وصل می‌کند. وصل‌شونده به هات‌اسپات وصل می‌شود، بعد آیپی هات‌اسپات اشتراک‌گذارنده (معمولاً 192.168.43.1) و پورت اشتراک را اینجا وارد می‌کند و وصل می‌شود. توجه: کلاینت‌های هات‌اسپات اندروید به‌طور پیش‌فرض VPN اشتراک‌گذارنده را دور می‌زنند — دقیقاً به همین دلیل وصل‌شونده باید پروکسی را تنظیم کند؛ بدون آن، وصل‌شونده تونل نمی‌شود.'],
+  'shareinfo3': ['Through the V2rayAG app (recommended): the joiner needs no subscription and no config — just the sharer\'s IP and port (and username/password only if the sharer set them; V2rayAG shares need none). Enter them above and tap Connect: the whole device routes through the sharer\'s tunnel, verified with the same real-traffic check as any other connection. In another app (for example Telegram: Settings → Data and Storage → Proxy), add the same address as a SOCKS5 proxy — only that app is tunneled, not the whole device.', 'از طریق اپ V2rayAG (پیشنهادی): وصل‌شونده به اشتراک یا کانفیگ نیازی ندارد — فقط آیپی و پورت اشتراک‌گذارنده (و نام کاربری/رمز فقط اگر اشتراک‌گذارنده گذاشته باشد؛ اشتراک V2rayAG نیازی به آن ندارد). آن‌ها را بالا وارد کنید و «اتصال» را بزنید: کل گوشی از تونل اشتراک‌گذارنده رد می‌شود، با همان بررسی ترافیک واقعی مثل هر اتصال دیگر. در اپ دیگر (مثلاً تلگرام: تنظیمات → داده و حافظه → پروکسی)، همان آدرس را به‌عنوان پروکسی SOCKS5 اضافه کنید — فقط همان اپ تونل می‌شود، نه کل گوشی.'],
+  'aichat': ['AI chat', 'چت هوش مصنوعی'],
+  'aiask': ['Ask about V2rayAG…', 'درباره V2rayAG بپرسید…'],
+  'ainokey': ['No AI key is set yet. The key comes from the project\'s AI_API_KEY secret (or type your own key in Settings → AI). Nothing was sent.', 'هنوز کلید هوش مصنوعی تنظیم نشده است. کلید از سکرت AI_API_KEY پروژه می‌آید (یا کلید خودتان را در تنظیمات → هوش مصنوعی وارد کنید). چیزی ارسال نشد.'],
+  'aifailed': ['AI request failed', 'درخواست هوش مصنوعی ناموفق بود'],
+  'aithinking': ['Thinking…', 'در حال فکر کردن…'],
+  'aiattach': ['log attached', 'لاگ پیوست شد'],
+  'ailogline': ['log line attached', 'یک خط لاگ پیوست شد'],
+  'aiquestions': ['Questions you can tap', 'سؤال‌هایی که می‌توانید بزنید'],
+  'aisettings': ['AI settings', 'تنظیمات هوش مصنوعی'],
+  'aikey': ['Your AI key (optional)', 'کلید هوش مصنوعی شما (اختیاری)'],
+  'aikey_h': ['Leave empty to use the key built into the app (project secret AI_API_KEY). Your own key here overrides it on this phone only, and is never sent anywhere except the AI provider when you ask a question.', 'خالی بگذارید تا از کلید داخل اپ استفاده شود (سکرت AI_API_KEY پروژه). کلید خودتان در اینجا فقط روی همین گوشی جایگزین آن می‌شود و جز هنگام پرسیدن سؤال به ارائه‌دهنده هوش مصنوعی، هیچ‌جا ارسال نمی‌شود.'],
+  'aiexplain_q': ['Explain this log line in simple language.', 'این خط لاگ را به زبان ساده توضیح بده.'],
+  'aikey_own': ['Your own key is set on this phone.', 'کلید خودتان روی همین گوشی تنظیم شده است.'],
+  'aikey_builtin': ['Built-in project key is active.', 'کلید داخلی پروژه فعال است.'],
+  'aikey_none': ['No key yet — AI chat will explain how to set one.', 'هنوز کلیدی نیست — چت هوش مصنوعی نحوه تنظیم آن را توضیح می‌دهد.'],
+  'aimodel': ['Model (GLM-4.7 Flash is the default — the newer free model)', 'مدل (پیش‌فرض GLM-4.7 Flash است — مدل رایگان جدیدتر)'],
+  'airemote': ['AI remote config URL (optional)', 'آدرس فایل تنظیمات از راه دور هوش مصنوعی (اختیاری)'],
+  'airemote_h': ['A JSON file you host anywhere (for example {"key": "…", "base_url": "…", "model": "…"}). When AI work starts, the app fetches it once and applies the key, base URL and model — so a rotated key reaches all phones with no new app version. Empty = off. Note: anyone with this URL can read the key inside it, just like a key baked into the app.', 'یک فایل JSON که هرجا می‌خواهید میزبانی می‌کنید (مثلاً {"key": "…", "base_url": "…", "model": "…"}). موقع شروع کار با هوش مصنوعی، اپ یک بار آن را می‌خواند و کلید، آدرس پایه و مدل را اعمال می‌کند — پس کلید چرخانده‌شده بدون نسخه جدید اپ به همه گوشی‌ها می‌رسد. خالی = خاموش. توجه: هرکس این آدرس را داشته باشد می‌تواند کلید داخلش را بخواند، درست مثل کلیدی که داخل اپ جاسازی شده است.'],
+  'airemoteempty': ['No remote config URL is set.', 'آدرس تنظیمات از راه دور تنظیم نشده است.'],
+  'airefresh': ['Refresh AI settings', 'به‌روزرسانی تنظیمات هوش مصنوعی'],
+  'airemoteok': ['AI settings updated from the remote config.', 'تنظیمات هوش مصنوعی از فایل از راه دور به‌روز شد.'],
+  'airemotefail': ['Could not fetch the remote AI settings', 'دریافت تنظیمات از راه دور هوش مصنوعی ممکن نشد'],
+  'aikeybad': ['The AI key looks invalid or expired (HTTP 401). Check the key in Settings → AI, or the project secret if you use the built-in key.', 'کلید هوش مصنوعی نامعتبر یا منقضی به نظر می‌رسد (خطای HTTP 401). کلید را در تنظیمات → هوش مصنوعی بررسی کنید، یا اگر از کلید داخلی استفاده می‌کنید سکرت پروژه را.'],
+  'aiquota': ['AI quota or rate limit reached (HTTP 429). Wait a bit and try again, or replace the key.', 'سهمیه یا محدودیت سرعت هوش مصنوعی تمام شده است (خطای HTTP 429). کمی صبر کنید و دوباره تلاش کنید، یا کلید را عوض کنید.'],
+  'aiforbidden': ['AI access forbidden (HTTP 403). The key may not have access to this model.', 'دسترسی به هوش مصنوعی ممنوع است (خطای HTTP 403). شاید کلید به این مدل دسترسی ندارد.'],
+  'aiserver': ['AI server error — try again shortly', 'خطای سرور هوش مصنوعی — کمی بعد دوباره تلاش کنید'],
+  'ainet': ['Network error reaching the AI service. Check your connection (if the AI endpoint is filtered, connect the VPN first).', 'خطای شبکه در رسیدن به سرویس هوش مصنوعی. اتصال را بررسی کنید (اگر آدرس هوش مصنوعی فیلتر است، اول VPN را وصل کنید).'],
 };
 
 class Store extends ChangeNotifier {
@@ -399,6 +473,42 @@ class Store extends ChangeNotifier {
   bool sortPing = false, testing = false, hostTesting = false, speedBusy = false;
   String speedResult = '';
   final Map<String, int> hostMs = {};
+  // v1.0.7: IPv6 switch (Settings, default off = exactly today's
+  // behavior). When on, core-mode configs get DNS queryStrategy
+  // UseIPv6 (see PoolEngine.useIpv6); Psiphon never sees it.
+  bool useIpv6 = false;
+  // v1.0.7: hosts imported from a .txt file (persisted). The Host /
+  // SNI finder tests presets + these; the grid shows all of them.
+  List<String> userHosts = [];
+  // v1.0.7: AI key typed in the app (Settings → AI). Empty means
+  // "use the key baked from the AI_API_KEY repo secret".
+  String aiApiKey = '';
+  // v1.0.7b: model picked in AI chat (glm-4.7-flash is the newer
+  // free model, so it is the default) + remote AI config. A JSON
+  // file at aiRemoteUrl lets the key/base URL/model be rotated
+  // WITHOUT a new app version: when AI work starts, the app
+  // fetches it once and applies what it finds. Precedence:
+  // in-app key > remote key > baked key; remote base > baked
+  // base; remote model wins until the user picks a model in
+  // chat (that clears the remote model until next refresh).
+  // The remote file is only as private as its URL — anyone
+  // with the URL can read the key inside, the same exposure
+  // as a key baked into a public APK.
+  String aiModel = 'glm-4.7-flash';
+  String aiRemoteUrl = '';
+  String aiRemoteKey = '';
+  String aiRemoteBase = '';
+  String aiRemoteModel = '';
+  // v1.0.7: last-used Share-joiner values, so the form is prefilled.
+  // The live session itself is `single` (a socks:// link).
+  String sharedProxyHost = '';
+  int sharedProxyPort = 18080;
+  String sharedProxyUser = '', sharedProxyPass = '';
+  bool sharedProxyActive = false;
+  // v1.0.7: Share-relay listen port (sharer side) + live relay.
+  int sharePort = 18080;
+  ShareRelay? shareRelay;
+  bool get sharing => shareRelay != null;
   List<String> myLinks = [], mySubs = [];
   List<String> favorites = [];
   int psiphonAttempts = 0;
@@ -547,6 +657,20 @@ class Store extends ChangeNotifier {
       testUrl = j['testUrl'] ?? testUrl;
       autoSortAfterTest = j['autoSortAfterTest'] ?? true;
       deleteConfirm = j['deleteConfirm'] ?? false;
+      // v1.0.7
+      useIpv6 = j['useIpv6'] == true;
+      if (j['userHosts'] is List) userHosts = List<String>.from(j['userHosts']);
+      aiApiKey = j['aiApiKey'] ?? '';
+      aiModel = j['aiModel'] ?? 'glm-4.7-flash';
+      aiRemoteUrl = j['aiRemoteUrl'] ?? '';
+      aiRemoteKey = j['aiRemoteKey'] ?? '';
+      aiRemoteBase = j['aiRemoteBase'] ?? '';
+      aiRemoteModel = j['aiRemoteModel'] ?? '';
+      sharedProxyHost = j['sharedProxyHost'] ?? '';
+      sharedProxyPort = j['sharedProxyPort'] ?? 18080;
+      sharedProxyUser = j['sharedProxyUser'] ?? '';
+      sharedProxyPass = j['sharedProxyPass'] ?? '';
+      sharePort = j['sharePort'] ?? 18080;
       // v46: old psiphonVpn bool migrates into psiMode above; no longer read here.
       subFirst = Map<String, int>.from(j['subFirst'] ?? {});
       subLinks = (j['subLinks'] as Map<String, dynamic>? ?? {}).map((k, v) => MapEntry(k, List<String>.from(v)));
@@ -571,6 +695,7 @@ class Store extends ChangeNotifier {
         'providerLastRefresh': providerLastRefresh, 'srcCache': srcCache, 'providersExpanded': providersExpanded, 'connType': connType, 'appMode': appMode, 'appSet': appSet.toList(),
         'cdnLinks': cdnLinks, 'fragment': fragment, 'fragAll': fragAll, 'fragLen': fragLen, 'fragInt': fragInt, 'testUrl': testUrl, 'autoSortAfterTest': autoSortAfterTest, 'deleteConfirm': deleteConfirm,
         'subFirst': subFirst, 'subLinks': subLinks, 'subRemoved': subRemoved,
+        'useIpv6': useIpv6, 'userHosts': userHosts, 'aiApiKey': aiApiKey, 'aiModel': aiModel, 'aiRemoteUrl': aiRemoteUrl, 'aiRemoteKey': aiRemoteKey, 'aiRemoteBase': aiRemoteBase, 'aiRemoteModel': aiRemoteModel, 'sharedProxyHost': sharedProxyHost, 'sharedProxyPort': sharedProxyPort, 'sharedProxyUser': sharedProxyUser, 'sharedProxyPass': sharedProxyPass, 'sharePort': sharePort,
       }));
     } catch (_) {}
     notifyListeners();
@@ -585,6 +710,11 @@ class Store extends ChangeNotifier {
 
   Future<void> disconnectAll() async {
     _connectToken++;
+    // v1.0.7: sharing only ever lives while connected. Stop the
+    // relay first: a relay with no tunnel behind it would hand
+    // joiners a dead proxy instead of failing cleanly.
+    await stopShare();
+    sharedProxyActive = false;
     await engine.disconnect();
     // engine.disconnect() already stopped the plugin core (the VPN layer);
     // only the flags need clearing here.
@@ -1155,6 +1285,11 @@ class Store extends ChangeNotifier {
       'fetchedAt': now,
       'total': info.total, 'upload': info.upload, 'download': info.download, 'expire': info.expire, 'known': info.known,
     };
+    // v1.0.7: one line per fetched source (host only, never the URL:
+    // subscription URLs carry private UUIDs). This is what answers
+    // "why does provider X show only N configs": N sources OK vs
+    // total, and how many links each one actually returned.
+    log('${Uri.tryParse(src.url)?.host ?? src.url}: ${(r['links'] as List).length} configs');
   }
 
   /// Refreshes a provider's sources, but only if its interval has elapsed
@@ -1180,11 +1315,30 @@ class Store extends ChangeNotifier {
     }
     providerStatus[p.id] = 'loading';
     notifyListeners();
-    await Future.wait(stale.map(_refreshSource));
+    // v1.0.7: fetch in small batches, not one N-way storm: 30
+    // concurrent TLS handshakes to one small host rate-limit and
+    // time out, which is how a provider ends up with only the few
+    // sources that won the race. Then one retry pass for sources
+    // that still have no cache at all (never-succeeded ones only;
+    // a failed source with old data keeps that data by design).
+    Future<void> batch(List<ProviderSource> list) async {
+      for (var i = 0; i < list.length; i += 5) {
+        final end = i + 5 < list.length ? i + 5 : list.length;
+        await Future.wait(list.sublist(i, end).map(_refreshSource));
+      }
+    }
+
+    await batch(stale);
+    final missing = p.sources.where((src) => srcCache[src.url] == null).toList();
+    if (missing.isNotEmpty) {
+      await Future.delayed(const Duration(seconds: 1));
+      await batch(missing);
+    }
     if (p.id == 'fast') providerLastRefresh['fast'] = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     providerStatus[p.id] = 'done';
     save();
-    log('${p.name}: refreshed, ${providerConfigCount(p.id)} configs now available');
+    final ok = p.sources.where((src) => srcCache[src.url] != null).length;
+    log('${p.name}: refreshed, ${providerConfigCount(p.id)} configs from $ok/${p.sources.length} sources');
   }
 
   Future<void> refreshEnabledProviders({bool force = false}) async {
@@ -1385,6 +1539,7 @@ class Store extends ChangeNotifier {
     e.proxyOnly = connType == 'proxy';
     e.strictVerify = strict;
     e.testUrl = testUrl;
+    e.useIpv6 = useIpv6;
     if (mode == 'cdn') {
       // v1.0.6: the tab must always have something to try. Registered
       // CDN configs first; with none, the pool's CDN (then TLS)
@@ -1734,7 +1889,66 @@ class Store extends ChangeNotifier {
     'dash.cloudflare.com', 'blog.cloudflare.com', 'workers.cloudflare.com', 'pages.cloudflare.com',
     'one.one.one.one', 'www.speedtest.net', 'discord.com', 'canva.com', 'www.shopify.com', 'medium.com',
     'www.udemy.com', 'zula.ir', 'gitlab.com', 'www.digitalocean.com', 'nodejs.org', 'www.fiverr.com',
+    // v1.0.7: the user's own list (verbatim spellings, deduplicated
+    // against the 20 above). The finder tests them exactly like the
+    // presets: only hosts that answer Cloudflare's trace page pass,
+    // which is what makes a host usable as a fronting SNI.
+    'netlify.com', 'helm.sh', 'keda.sh', 'rook.io', 'istio.io', 'cilium.io', 'vuejs.org', 'nuxt.com',
+    'nuxr.com', 'vitejs.dev', 'smashingmagazine.com', 'fluxcd.io', 'harbor.io', 'calico.org', 'linkerd.io',
+    'openebs.io', 'tekton.dev', 'longhorn.io', 'blog.helm.sh', 'docs.helm.sh', 'crossplane.io', 'kubernetes.io',
+    'kubebuilder.io', 'letsencrypt.org', 'kind.sigs.k8s.io', 'kops.sigs.k8s.io', 'krew.sigs.k8s.io',
+    'kwok.sigs.k8s.io', 'kqueue.sigs.k8s.io', 'jobsets.sigs.k8s.io', 'kaniko.sigs.k8s.io', 'minikube.sigs.k8s.io',
+    'operatorframework.io', 'container.sigs.k8s.io', 'kustomize.sigs.k8s.io', 'argo-cd.readthedocs.io',
+    'cluster-api.sigs.k8s.io', 'descheduler.sigs.k8s.io', 'gateway-api.sigs.k8s.io', 'external-dns.sigs.k8s.io',
+    'service-apis.sigs.k8s.io', 'image-builder.sigs.k8s.io', 'kubectl.docs.kubernetes.io', 'metrics-server.sigs.k8s.io',
+    'scheduler-plugins.sigs.k8s.io', 'controller-runtime.sigs.k8s.io', 'prometheus-operator.sigs.k8s.io',
+    'node-feature-discovery.sigs.k8s.io', 'hierarchical-namespaces.sigs.k8s.io', 'secrets-store-csi-driver.sigs.k8s.io',
+    'security-profiles-operator.sigs.k8s.io', 'chatgpt.com', 'vercel.com', 'static.cloudflareinsights.com',
+    'sourceforge.net', 'a.fsdn.com', 'npmjs.com', 'e7.c.lencr.org', 'cdnjs.com', 'creativecommons.org',
+    'jsdelivr.com', 'phpbb.com', 'codepen.io', 'google.com', 'translate.google.com', 'gmail.com', 'github.com',
+    'coingecko.cfd', 'store.steampowered.com', 'apple.com', 'chat.deepseek.com', 'wikipedia.org', 'play.google.com',
+    'whatsapp.com', 'playstation.com', 'xbox.com', 'microsoft.com', 'fastly.com', 'www.hcaptcha.com',
+    'sciencedirect.com', 'code.visualstudio.com', 'youtube.com', 'facebook.com', 'instagram.com', 'twitter.com',
+    'amazon.com', 'yahoo.com', 'tiktok.com', 'reddit.com', 'linkedin.com', 'netflix.com', 'bing.com',
+    'office.com', 'live.com', 'twitch.tv', 'pinterest.com', 'stackoverflow.com', 'spotify.com', 'paypal.com',
+    'ebay.com', 'cnn.com', 'bbc.com', 'nytimes.com', 'weather.com', 'zoom.us', 'dropbox.com', 'adobe.com',
+    'wordpress.com', 'blogger.com', 'tumblr.com', 'imgur.com', 'quora.com', 'cloudflare.com', 'salesforce.com',
+    'shopify.com', 'etsy.com', 'glassdoor.com', 'monster.com', 'upwork.com', 'fiverr.com', 'freelancer.com',
+    'coursera.org', 'udemy.com', 'khanacademy.org', 'edx.org', 'duolingo.com', 'figma.com', 'asana.com',
+    'slack.com', 'atlassian.com', 'jira.com', 'bitbucket.org', 'heroku.com', 'aws.amazon.com', 'cloud.google.com',
+    'azure.microsoft.com', 'intel.com', 'nvidia.com', 'amd.com', 'x.com', 'threads.net', 'snapchat.com',
+    'telegram.org', 'viber.com', 'wechat.com', 'line.me', 'skype.com', 'signal.org', 'mastodon.social',
+    'bluesky.social', 'deviantart.com', 'behance.net', 'dribbble.com', 'artstation.com', 'pnpm.io', 'cert-manager.io',
   ];
+
+  /// Presets + user-imported hosts, deduplicated (case-insensitive).
+  /// This is the list the finder tests and the grid shows.
+  List<String> get allHosts {
+    final seen = <String>{};
+    final out = <String>[];
+    for (final h in [...hostPresets, ...userHosts]) {
+      if (seen.add(h.toLowerCase())) out.add(h);
+    }
+    return out;
+  }
+
+  /// Adds hosts from imported text (one per line). Returns how many
+  /// new hosts were added. Lines without a dot, with spaces or a
+  /// scheme, and duplicates are skipped, never stored.
+  int addUserHosts(String text) {
+    var added = 0;
+    final known = allHosts.map((h) => h.toLowerCase()).toSet();
+    for (final raw in text.split(RegExp(r'[\s,;]+'))) {
+      final h = raw.trim().toLowerCase().replaceAll(RegExp(r'^https?://'), '').split('/').first;
+      if (h.isEmpty || !h.contains('.') || h.contains(' ') || h.contains(':')) continue;
+      if (known.add(h)) {
+        userHosts.add(h);
+        added++;
+      }
+    }
+    if (added > 0) save();
+    return added;
+  }
 
   /// Real TLS handshake with each candidate host as SNI against a Cloudflare IP.
   /// Only hosts that answer with Cloudflare's trace page pass, on YOUR operator.
@@ -1745,10 +1959,13 @@ class Store extends ChangeNotifier {
     notifyListeners();
     final rng = Random();
     final ip = cleanIp.isNotEmpty ? cleanIp : randomIpIn('104.16.0.0/13', rng);
+    // v1.0.7: tests presets + user-imported hosts (allHosts), not
+    // just the presets, so an imported list is actually scanned.
+    final hosts = allHosts;
     var i = 0;
     Future<void> worker() async {
-      while (i < hostPresets.length) {
-        final h = hostPresets[i++];
+      while (i < hosts.length) {
+        final h = hosts[i++];
         var ms = -1;
         for (var k = 0; k < 3 && ms < 0; k++) {
           final r = await probeIp(k == 0 ? ip : randomIpIn('104.16.0.0/13', rng), h);
@@ -1763,8 +1980,162 @@ class Store extends ChangeNotifier {
     hostTesting = false;
     final ok = hostMs.entries.where((e) => e.value > 0).toList()..sort((a, b) => a.value.compareTo(b.value));
     if (ok.isNotEmpty) frontHost = ok.first.key;
-    log('Host finder: ${ok.length}/${hostPresets.length} hosts work${ok.isEmpty ? '' : ', best ${ok.first.key} (${ok.first.value} ms)'}');
+    log('Host finder: ${ok.length}/${hosts.length} hosts work${ok.isEmpty ? '' : ', best ${ok.first.key} (${ok.first.value} ms)'}');
     save();
+  }
+
+  // --- v1.0.7: AI (OpenAI-compatible chat, Z.ai by default) -----
+  // The key and base URL are baked at build time from the repo
+  // secrets AI_API_KEY / AI_BASE_URL (the workflow base64s them
+  // into dart-defines). Rotating a secret alone does NOT change
+  // installed apps — a rebuild publishes the new key. Two
+  // no-rebuild paths exist: the in-app aiApiKey field (one
+  // device) and the remote config below (all devices at once).
+  static String _bakedAiKey() {
+    try {
+      const v = String.fromEnvironment('AI_API_KEY_B64', defaultValue: '');
+      if (v.isEmpty) return '';
+      return utf8.decode(base64.decode(base64.normalize(v)));
+    } catch (_) {
+      return '';
+    }
+  }
+
+  static String get bakedAiBase {
+    try {
+      const v = String.fromEnvironment('AI_BASE_URL_B64', defaultValue: '');
+      if (v.isEmpty) return 'https://api.z.ai/api/paas/v4';
+      return utf8.decode(base64.decode(base64.normalize(v)));
+    } catch (_) {
+      return 'https://api.z.ai/api/paas/v4';
+    }
+  }
+
+  /// Effective key: in-app override, then remote config, then
+  /// the baked secret. Effective base: remote, then baked.
+  /// Effective model: remote, then the chat-picked model.
+  String get aiKey => aiApiKey.trim().isNotEmpty
+      ? aiApiKey.trim()
+      : aiRemoteKey.isNotEmpty
+          ? aiRemoteKey
+          : _bakedAiKey();
+  String get aiBase => aiRemoteBase.isNotEmpty ? aiRemoteBase : bakedAiBase;
+  String get aiModelEff => aiRemoteModel.isNotEmpty ? aiRemoteModel : aiModel;
+  bool get aiReady => aiKey.isNotEmpty;
+
+  /// Fetches the remote AI config JSON once (called when AI work
+  /// starts, and from the manual refresh button). Accepted fields
+  /// (all optional, strings): key / api_key, base_url / baseUrl,
+  /// model. Returns '' on success or a translated error string.
+  /// A fetched value replaces the previous remote value; an
+  /// absent field leaves the previous remote value untouched, so
+  /// a partial file cannot wipe the working config.
+  Future<String> refreshAiRemote() async {
+    final url = aiRemoteUrl.trim();
+    if (url.isEmpty) return t('airemoteempty');
+    HttpClient? c;
+    try {
+      c = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+      final req = await c.getUrl(Uri.parse(url));
+      final res = await req.close().timeout(const Duration(seconds: 15));
+      final body = await res.transform(utf8.decoder).join();
+      if (res.statusCode != 200) {
+        return '${t('airemotefail')} (HTTP ${res.statusCode})';
+      }
+      final j = jsonDecode(body);
+      if (j is! Map) return t('airemotefail');
+      String str(String a, [String? b]) {
+        final v = j[a] ?? (b != null ? j[b] : null);
+        return v is String ? v.trim() : '';
+      }
+
+      final key = str('key', 'api_key');
+      final base = str('base_url', 'baseUrl').replaceAll(RegExp(r'/+$'), '');
+      final model = str('model');
+      var changed = false;
+      if (key.isNotEmpty && key != aiRemoteKey) {
+        aiRemoteKey = key;
+        changed = true;
+      }
+      if (base.isNotEmpty &&
+          (base.startsWith('http://') || base.startsWith('https://')) &&
+          base != aiRemoteBase) {
+        aiRemoteBase = base;
+        changed = true;
+      }
+      if (model.isNotEmpty && model != aiRemoteModel) {
+        aiRemoteModel = model;
+        changed = true;
+      }
+      save();
+      log('AI remote config: ${changed ? 'updated' : 'unchanged'}'
+          '${aiRemoteModel.isNotEmpty ? ' (model $aiRemoteModel)' : ''}');
+      return t('airemoteok');
+    } on TimeoutException {
+      return '${t('airemotefail')}: timed out';
+    } on SocketException {
+      return t('ainet');
+    } catch (e) {
+      return '${t('airemotefail')}: $e';
+    } finally {
+      c?.close(force: true);
+    }
+  }
+
+  // --- v1.0.7: Share VPN ----------------------------------------
+  /// Starts the LAN relay. Returns '' on success or a translated
+  /// error string. Only while connected; only one relay at a time.
+  Future<String> startShare() async {
+    if (shareRelay != null) return '';
+    final engOn = engine.state.phase == Phase.connected;
+    final psiOn = psiphon.state.phase == PsiphonPhase.connected;
+    if (!engOn && !psiOn) return t('sharenotconn');
+    final relay = ShareRelay();
+    final coreCands = <int>[10808, 10807];
+    if (engOn && engine.localProxyPort != null) coreCands.add(engine.localProxyPort!);
+    final target = await relay.detectTarget(
+      psiphonSocks: psiOn ? psiphon.state.socksPort : null,
+      coreCandidates: coreCands,
+    );
+    if (target == null) return t('shareunavail');
+    try {
+      await relay.start(listenPort: sharePort, targetPort: target.port);
+    } catch (e) {
+      return '${t('sharefailed')} $e';
+    }
+    shareRelay = relay;
+    sharePort = relay.port;
+    log('Share VPN: SOCKS5 relay ${relay.lanIps.join(', ')}:${relay.port} -> 127.0.0.1:${target.port} (${target.source})');
+    save();
+    notifyListeners();
+    return '';
+  }
+
+  Future<void> stopShare() async {
+    final r = shareRelay;
+    if (r == null) return;
+    shareRelay = null;
+    await r.stop();
+    log('Share VPN: relay stopped');
+    notifyListeners();
+  }
+
+  /// Joiner side: connect the whole device through someone else's
+  /// shared proxy, with no subscription or config of your own. The
+  /// session is a plain socks:// single config in Personal mode, so
+  /// it goes through the same plugin start + traffic-proof verify
+  /// as any other config, and disconnects with disconnectAll.
+  Future<void> connectSharedProxy(String host, int port, {String user = '', String pass = ''}) async {
+    sharedProxyHost = host;
+    sharedProxyPort = port;
+    sharedProxyUser = user;
+    sharedProxyPass = pass;
+    final auth = user.isEmpty ? '' : '${Uri.encodeComponent(user)}:${Uri.encodeComponent(pass)}@';
+    single = 'socks://$auth$host:$port#Shared%20proxy';
+    mode = 'personal';
+    sharedProxyActive = true;
+    save();
+    await connect();
   }
 
   /// This app's own Android system log (the VPN plugin writes its errors there).
