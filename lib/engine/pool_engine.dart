@@ -131,6 +131,12 @@ class EngineState {
   final String message;
   final String? configName, exitIp, location, realIp, proxyInfo, providerName;
   final bool tunOk;
+  // v1.0.7: true while the background geo lookup for the current
+  // session is still running. The card shows a small spinner in
+  // place of "-" for IP/Location while this is true, so the user
+  // sees "detecting" instead of "empty"; it goes false on success
+  // OR failure, so a dead lookup never spins forever.
+  final bool geoLoading;
   final int? delayMs;
   final SubInfo? sub;
   final CoreStatus traffic;
@@ -145,10 +151,32 @@ class EngineState {
     this.proxyInfo,
     this.providerName,
     this.tunOk = false,
+    this.geoLoading = false,
     this.delayMs,
     this.sub,
     this.traffic = const CoreStatus(),
   });
+}
+
+/// v1.0.7: returns [cfgJson] with Xray DNS queryStrategy forced to
+/// UseIPv6 (Settings → IPv6, default off). An existing dns section
+/// keeps its servers; a missing one gets Cloudflare's, matching the
+/// app's Psiphon-VPN config. Returns the input unchanged when it is
+/// not a JSON object (never break a start on a patch failure).
+/// Literal-IP configs are unaffected by construction: queryStrategy
+/// only guides domain resolution, and they have no domain to resolve.
+String withIpv6Dns(String cfgJson) {
+  try {
+    final m = jsonDecode(cfgJson);
+    if (m is! Map<String, dynamic>) return cfgJson;
+    final dns = (m['dns'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    dns['queryStrategy'] = 'UseIPv6';
+    dns.putIfAbsent('servers', () => ['1.1.1.1']);
+    m['dns'] = dns;
+    return jsonEncode(m);
+  } catch (_) {
+    return cfgJson;
+  }
 }
 
 class _Fetched {
@@ -181,6 +209,14 @@ class PoolEngine {
   List<String> directLinks = [];
   List<String> blockedApps = [];
   bool keepOriginal = false, cdnFragment = false, proxyOnly = false, strictVerify = true;
+  // v1.0.7: Settings → IPv6 switch (default off). When true, every
+  // core-mode config started by this engine gets queryStrategy
+  // UseIPv6 patched in (see withIpv6Dns). Psiphon never touches this.
+  bool useIpv6 = false;
+  // v1.0.7: the local proxy port this engine proved works (found by
+  // _findProxy during verification). The Share relay forwards to it;
+  // null when no local proxy was proven for this session.
+  int? get localProxyPort => _proxyPort;
   String fragLen = '100-200', fragInt = '10-20';
   bool Function(String)? fallbackFilter;
   List<String> priority = ['tr gaming'];
@@ -260,6 +296,8 @@ class PoolEngine {
   }
   String? get currentLink => _cur?.link ?? _restoredLink;
   String? get currentProvider => _bundleName;
+  bool _geoLoading = false;
+  int _geoGen = 0;
 
   EngineState get state => EngineState(
         phase: _phase,
@@ -272,6 +310,7 @@ class PoolEngine {
         proxyInfo: _proxyInfo,
         providerName: _bundleName,
         tunOk: _tunOk,
+        geoLoading: _geoLoading,
         delayMs: _delay,
         sub: _sub,
         traffic: _live ?? _traffic,
@@ -562,7 +601,7 @@ class PoolEngine {
       for (final x in cfgs) {
         for (var a = 0; a < 2 && !started; a++) {
           try {
-            await core.start(c.remark, x, blockedApps: blockedApps, proxyOnly: proxyOnly);
+            await core.start(c.remark, useIpv6 ? withIpv6Dns(x) : x, blockedApps: blockedApps, proxyOnly: proxyOnly);
             cfg = x;
             started = true;
           } catch (e) {
@@ -719,16 +758,36 @@ class PoolEngine {
       return null;
     }
 
+    // v1.0.7: geoLoading drives the card's spinner. The generation
+    // guard keeps a stale lookup (failover moved on) from clearing a
+    // newer lookup's spinner.
+    final gen = ++_geoGen;
+    void clear() {
+      if (_geoGen == gen) {
+        _geoLoading = false;
+        _emit();
+      }
+    }
+
+    _geoLoading = true;
+    _emit();
     var geo = await fetch();
     if (geo == null) {
       log('Location lookup failed, retrying in 20s');
       await Future.delayed(const Duration(seconds: 20));
-      if (!_wanted || _phase != Phase.connected || _cur?.link != link) return;
+      if (!_wanted || _phase != Phase.connected || _cur?.link != link) {
+        clear();
+        return;
+      }
       geo = await fetch();
     }
-    if (geo == null || !_wanted || _phase != Phase.connected || _cur?.link != link) return;
+    if (geo == null || !_wanted || _phase != Phase.connected || _cur?.link != link) {
+      clear();
+      return;
+    }
     _ip = geo['ip'];
     _loc = '${flagOf(geo['cc'] ?? '')} ${geo['loc'] ?? ''}'.trim();
+    _geoLoading = false;
     log('Location: $_loc');
     _emit();
   }
@@ -861,7 +920,7 @@ class PoolEngine {
     try {
       await _hardStop();
       final cfg = cdnFragment ? applyFragment(p.config, length: fragLen, interval: fragInt) : p.config;
-      await core.start(p.remark, cfg, proxyOnly: true);
+      await core.start(p.remark, useIpv6 ? withIpv6Dns(cfg) : cfg, proxyOnly: true);
       _proxyPort = await _findProxy(cfg);
       if (_proxyPort == null) return -1;
       return await measurePing();
@@ -1085,7 +1144,12 @@ class PoolEngine {
 
   Future<_Fetched?> _fetchSub(String url, {int? viaProxyPort}) async {
     for (final lenient in [false, true]) {
-      final c = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+      // v1.0.7: subscription hosts (notably small reseller panels)
+      // are slow under load and 30-way concurrent refreshes made it
+      // worse; 8s/12s instead of 5s/7s so a slow host is not counted
+      // as dead. The connect path never waits on this (refresh is
+      // background), so the looser budget costs nothing there.
+      final c = HttpClient()..connectionTimeout = const Duration(seconds: 8);
       if (viaProxyPort != null) c.findProxy = (_) => 'PROXY 127.0.0.1:$viaProxyPort';
       if (lenient) c.badCertificateCallback = (cert, host, port) => true;
       try {
@@ -1093,7 +1157,7 @@ class PoolEngine {
         req.headers.set('User-Agent', 'v2rayNG/1.9.0');
         req.headers.set('Cache-Control', 'no-cache');
         req.headers.set('Pragma', 'no-cache');
-        final res = await req.close().timeout(const Duration(seconds: 7));
+        final res = await req.close().timeout(const Duration(seconds: 12));
         if (res.statusCode != 200) {
           log('Subscription HTTP ${res.statusCode}: ${_short(url)}');
           return null;
