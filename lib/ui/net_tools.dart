@@ -13,10 +13,35 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app/store.dart';
+
+void _copy(BuildContext c, String text, String done) {
+  Clipboard.setData(ClipboardData(text: text));
+  ScaffoldMessenger.of(c).showSnackBar(SnackBar(content: Text(done)));
+}
+
+/// Reads a picked .txt file as text, or null when cancelled or
+/// unreadable. Same pattern as the subscription file import.
+Future<String?> _pickTxt() async {
+  try {
+    final file = await FilePicker.pickFile();
+    if (file == null) return null;
+    try {
+      final bytes = await file.readAsBytes();
+      return utf8.decode(bytes);
+    } catch (_) {
+      final path = file.path;
+      if (path == null) return null;
+      return await File(path).readAsString();
+    }
+  } catch (_) {
+    return null;
+  }
+}
 
 class _DnsEntry {
   final String name, ip;
@@ -30,6 +55,19 @@ const _dnsProviders = [
   _DnsEntry('OpenDNS', '208.67.222.222'),
   _DnsEntry('AdGuard', '94.140.14.14'),
   _DnsEntry('Shecan', '178.22.122.100'),
+  // v1.0.7: second anycast addresses + more real public resolvers.
+  _DnsEntry('Cloudflare 2', '1.0.0.1'),
+  _DnsEntry('Google 2', '8.8.4.4'),
+  _DnsEntry('Quad9 2', '149.112.112.112'),
+  _DnsEntry('OpenDNS 2', '208.67.220.220'),
+  _DnsEntry('AdGuard 2', '94.140.15.15'),
+  _DnsEntry('Shecan 2', '185.51.200.2'),
+  _DnsEntry('ControlD', '76.76.2.0'),
+  _DnsEntry('CleanBrowsing', '185.228.168.9'),
+  _DnsEntry('Comodo', '8.26.56.26'),
+  _DnsEntry('Yandex', '77.88.8.8'),
+  _DnsEntry('OpenDNS Family', '208.67.222.123'),
+  _DnsEntry('Cloudflare Malware', '1.1.1.2'),
 ];
 
 /// One minimal DNS query (A record for example.com) over UDP, timed.
@@ -145,6 +183,49 @@ class _DnsTestState extends State<DnsTestPage> {
         ]),
         const SizedBox(height: 12),
         FilledButton.icon(icon: const Icon(Icons.speed), label: Text(testing ? '...' : s.t('test')), onPressed: testing ? null : _testAll),
+        const SizedBox(height: 8),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          OutlinedButton.icon(
+            icon: const Icon(Icons.file_upload_outlined, size: 18),
+            label: Text(s.t('importdns')),
+            onPressed: () async {
+              final text = await _pickTxt();
+              if (text == null || !mounted) return;
+              final ipRe = RegExp(r'^\d{1,3}(\.\d{1,3}){3}$');
+              var added = 0;
+              for (final raw in text.split(RegExp(r'[\r\n]+'))) {
+                final line = raw.trim();
+                if (line.isEmpty) continue;
+                final parts = line.split(RegExp(r'\s+'));
+                String name, ip;
+                if (parts.length >= 2 && ipRe.hasMatch(parts[1])) {
+                  name = parts[0];
+                  ip = parts[1];
+                } else if (ipRe.hasMatch(parts[0])) {
+                  name = parts[0];
+                  ip = parts[0];
+                } else {
+                  continue;
+                }
+                if (entries.any((e) => e.ip == ip)) continue;
+                entries.add(_DnsEntry(name, ip));
+                added++;
+                if (added >= 100) break;
+              }
+              if (mounted) setState(() {});
+              if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${s.t('added')}: $added')));
+            },
+          ),
+          if (results.values.any((v) => v >= 0))
+            OutlinedButton.icon(
+              icon: const Icon(Icons.copy, size: 18),
+              label: Text(s.t('copyworking')),
+              onPressed: () {
+                final working = entries.where((e) => (results[e.ip] ?? -1) >= 0).toList()..sort((a, b) => results[a.ip]!.compareTo(results[b.ip]!));
+                _copy(context, working.map((e) => '${e.name} ${e.ip} ${results[e.ip]} ms').join('\n'), s.t('copy'));
+              },
+            ),
+        ]),
         const SizedBox(height: 12),
         for (final e in rows)
           ListTile(
@@ -157,6 +238,7 @@ class _DnsTestState extends State<DnsTestPage> {
                     results[e.ip]! < 0 ? s.t('noreply') : '${results[e.ip]} ms',
                     style: TextStyle(color: results[e.ip]! < 0 ? Colors.redAccent : (results[e.ip]! < 200 ? const Color(0xFF2BD67B) : (results[e.ip]! < 500 ? Colors.amber : Colors.orange))),
                   ),
+            onTap: () => _copy(context, e.ip, s.t('copy')),
           ),
       ]),
     );
@@ -183,6 +265,45 @@ const _defaultDomains = [
   'cloudflare.com',
   'apple.com',
   'microsoft.com',
+  // v1.0.7: more real, popular domains across services, clouds and
+  // dev tools, so the checker says something useful on any network.
+  'chatgpt.com',
+  'vercel.com',
+  'npmjs.com',
+  'nodejs.org',
+  'codepen.io',
+  'translate.google.com',
+  'gmail.com',
+  'play.google.com',
+  'playstation.com',
+  'xbox.com',
+  'fastly.com',
+  'stackoverflow.com',
+  'spotify.com',
+  'paypal.com',
+  'ebay.com',
+  'cnn.com',
+  'bbc.com',
+  'nytimes.com',
+  'zoom.us',
+  'dropbox.com',
+  'adobe.com',
+  'wordpress.com',
+  'imgur.com',
+  'quora.com',
+  'salesforce.com',
+  'shopify.com',
+  'etsy.com',
+  'gitlab.com',
+  'digitalocean.com',
+  'aws.amazon.com',
+  'cloud.google.com',
+  'azure.microsoft.com',
+  'intel.com',
+  'nvidia.com',
+  'threads.net',
+  'snapchat.com',
+  'signal.org',
 ];
 
 Future<_DomResult> _checkDomain(String d) async {
@@ -262,6 +383,36 @@ class _DomainCheckState extends State<DomainCheckPage> {
         ]),
         const SizedBox(height: 12),
         FilledButton.icon(icon: const Icon(Icons.language_outlined), label: Text(testing ? '...' : s.t('test')), onPressed: testing ? null : _testAll),
+        const SizedBox(height: 8),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          OutlinedButton.icon(
+            icon: const Icon(Icons.file_upload_outlined, size: 18),
+            label: Text(s.t('importdomains')),
+            onPressed: () async {
+              final text = await _pickTxt();
+              if (text == null || !mounted) return;
+              var added = 0;
+              for (final raw in text.split(RegExp(r'[\s,;]+'))) {
+                final v = raw.trim().toLowerCase().replaceAll(RegExp(r'^https?://'), '').split('/').first;
+                if (v.isEmpty || !v.contains('.') || v.contains(' ') || domains.contains(v)) continue;
+                domains.add(v);
+                added++;
+                if (added >= 200) break;
+              }
+              if (mounted) setState(() {});
+              if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${s.t('added')}: $added')));
+            },
+          ),
+          if (results.values.any((r) => r.ok))
+            OutlinedButton.icon(
+              icon: const Icon(Icons.copy, size: 18),
+              label: Text(s.t('copyhealthy')),
+              onPressed: () {
+                final ok = domains.where((d) => results[d]?.ok == true).toList()..sort((a, b) => results[a]!.ms.compareTo(results[b]!.ms));
+                _copy(context, ok.map((d) => '$d ${results[d]!.ms} ms').join('\n'), s.t('copy'));
+              },
+            ),
+        ]),
         const SizedBox(height: 12),
         for (final d in rows)
           ListTile(
@@ -273,6 +424,7 @@ class _DomainCheckState extends State<DomainCheckPage> {
                     results[d]!.ok ? '${s.t('reachable')} ${results[d]!.ms} ms' : s.t('blocked'),
                     style: TextStyle(color: results[d]!.ok ? const Color(0xFF2BD67B) : Colors.redAccent),
                   ),
+            onTap: () => _copy(context, d, s.t('copy')),
           ),
       ]),
     );
