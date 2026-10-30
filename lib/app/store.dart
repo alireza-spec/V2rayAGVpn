@@ -36,6 +36,8 @@ const _tr = <String, List<String>>{
   'pool': ['Pool', 'مجموعه'],
   'connected': ['CONNECTED', 'متصل'],
   'notconn': ['NOT CONNECTED', 'قطع'],
+  'drawer_psi': ['Psiphon Connected', 'سایفون متصل است'],
+  'drawer_combo': ['Psiphon+V2ray Connected', 'سایفون + V2ray متصل است'],
   'server': ['Server', 'سرور'],
   'ip': ['IP address', 'آدرس IP'],
   'loc': ['Location', 'موقعیت'],
@@ -153,6 +155,27 @@ const _tr = <String, List<String>>{
   'cdnsetup': ['CDN Fronting setup', 'تنظیم فرانتینگ CDN'],
   'cdncfg': ['CDN configs (optional)', 'کانفیگ‌های CDN (اختیاری)'],
   'cdncfg_h': ['Paste vless / trojan / vmess WebSocket or gRPC configs that sit behind a CDN. Leave empty to use the pool.', 'کانفیگ‌های وی‌لس / تروجان / وی‌مس وب‌سوکت یا gRPC پشت CDN را بچسبانید. خالی بگذارید تا از مجموعه استفاده شود.'],
+  'cdnfromproviders': ['Provider configs', 'کانفیگ‌های پروایدرها'],
+  'cdnconfigs': ['CDN configs', 'کانفیگ‌های CDN'],
+  'dnstest': ['DNS latency test', 'تست تأخیر DNS'],
+  'dnstest_d': ['Measures how fast well-known DNS servers answer, from this phone.', 'سرعت پاسخ سرورهای DNS معروف را از همین گوشی می‌سنجد.'],
+  'domaincheck': ['Domain checker', 'بررسی دامنه‌ها'],
+  'domaincheck_d': ['Checks which popular sites are reachable through the current connection.', 'بررسی می‌کند کدام سایت‌های معروف از طریق اتصال فعلی در دسترس‌اند.'],
+  'vlessmod': ['Vless config modifier', 'تغییر آی‌پی کانفیگ'],
+  'vlessmod_d': ['Swaps the address in a vless/trojan config for a list of IPs. Useful for fronting through clean IPs.', 'آدرس کانفیگ vless/trojan را با فهرستی از آی‌پی‌ها عوض می‌کند. برای فرانتینگ با آی‌پی تمیز کاربرد دارد.'],
+  'psi_attempts_total': ['Total Psiphon attempts', 'مجموع تلاش‌های سایفون'],
+  'noreply': ['no reply', 'بدون پاسخ'],
+  'reachable': ['reachable', 'در دسترس'],
+  'blocked': ['blocked', 'مسدود'],
+  'generate': ['Generate', 'ساختن'],
+  'pasteconfig': ['Paste a vless / trojan config', 'یک کانفیگ vless / trojan بچسبانید'],
+  'iplist': ['IPs: one per line, a range (a-b), or CIDR', 'آی‌پی‌ها: هر خط یکی، بازه (a-b) یا CIDR'],
+  'customdns': ['Custom DNS IP', 'آی‌پی DNS دلخواه'],
+  'customdomain': ['Custom domain', 'دامنه دلخواه'],
+  'nettools': ['Network tools', 'ابزارهای شبکه'],
+  'nettools_d': ['DNS, domain and config tools, so a separate checker app is not needed.', 'ابزارهای DNS، دامنه و کانفیگ، تا به اپ بررسی جداگانه نیازی نباشد.'],
+  'addcustom': ['Add', 'افزودن'],
+  'invalidconfig': ['That is not a vless/trojan link', 'این لینک vless/trojan نیست'],
   'fragment': ['TLS fragment', 'فرگمنت TLS'],
   'fragment_h': ['Cuts the TLS hello into pieces so filtering cannot read the host name. This is how MahsaNG bypasses Iranian operators.', 'پیام TLS را تکه‌تکه می‌کند تا فیلترینگ نتواند نام هاست را بخواند. مهسا‌ان‌جی هم همین‌طور از اپراتورهای ایران عبور می‌کند.'],
   'fraglen': ['Fragment length', 'طول فرگمنت'],
@@ -338,13 +361,15 @@ class Store extends ChangeNotifier {
   bool pulse = false, fragment = true, fragAll = false, strict = true, appsLoading = false;
   String connType = 'vpn', appMode = 'all';
   Map<String, bool> providerEnabled = {for (final p in kProviders) p.id: (String.fromEnvironment('PROVIDERS_B64').isNotEmpty ? p.defaultEnabled : true)};
-  // Fresh installs start with the user's priority order, not the
-  // built-in list order: Fast first, Update second, V2rayAG Exclusive
-  // third. The old migration only ran when a saved file existed, so a
-  // fresh install kept Exclusive first; field defaults fix that.
-  List<String> providerOrder = String.fromEnvironment('PROVIDERS_B64').isNotEmpty || String.fromEnvironment('PROVIDER_FAST_B64').isNotEmpty
-      ? kProviders.map((p) => p.id).toList()
-      : ['fast', 'update', 'v2rayag', 'antifilter', 'hiddify'];
+  // v1.0.6: the order is always the full provider list. The old
+  // default fell back to a hardcoded 5-item list whenever the Fast
+  // secret define was empty, so a fresh install hid the AI provider
+  // (it still refreshed — initAllProviders iterates kProviders — but
+  // the panel, servers and subs all iterate providerOrder). kProviders
+  // already embodies "secrets merged over fallback", so it is the
+  // only correct default; the migration below re-sorts it to the
+  // user's priority order on first run.
+  List<String> providerOrder = kProviders.map((p) => p.id).toList();
   Map<String, int> providerLastRefresh = {};
   Map<String, Map<String, dynamic>> srcCache = {};
   final Map<String, String> providerStatus = {};
@@ -361,7 +386,10 @@ class Store extends ChangeNotifier {
   Map<String, List<String>> subLinks = {}, subRemoved = {};
   Map<String, int> subFirst = {};
   int pingDone = 0, pingTotal = 0;
-  int accent = 0xFF3CC4BA, tab = 0;
+  // v1.0.6: default accent is blue, the graphite-friendly accent the
+  // user picked (was teal). Existing installs on the old teal default
+  // migrate once in load(); an explicit non-default choice is kept.
+  int accent = 0xFF5AA2FF, tab = 0;
   String scanCdn = 'Cloudflare', scanStage = '';
   int scanCount = 300, scanDone = 0, scanTotal = 0, scanStageNo = 0;
   bool scanning = false, _scanStop = false;
@@ -447,6 +475,13 @@ class Store extends ChangeNotifier {
         themeDefaultsVersion = 2;
         migrated = true;
       }
+      // v1.0.6: the default accent is now blue. One-time: an install
+      // still on the old teal default moves to blue; an explicit
+      // non-default choice is never touched, and teal stays pickable.
+      if (accent == 0xFF3CC4BA) {
+        accent = 0xFF5AA2FF;
+        migrated = true;
+      }
       if (j['speedHistory'] is List) speedHistory = (j['speedHistory'] as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
       cdnLinks = List<String>.from(j['cdnLinks'] ?? []);
       fragment = j['fragment'] ?? true;
@@ -482,12 +517,24 @@ class Store extends ChangeNotifier {
         providerDefaultsVersion = 2;
         migrated = true;
       }
+      // v1.0.6: the order must always cover every provider and never
+      // carry a stale id (a removed secret's id would crash the panel
+      // in providerById). The append runs again after the migration,
+      // so a desired-list omission can never drop a provider, and a
+      // stale id is dropped instead of crashing the list.
+      providerOrder = providerOrder.where((id) => kProviders.any((p) => p.id == id)).toList();
+      for (final p in kProviders) {
+        if (!providerOrder.contains(p.id)) providerOrder.add(p.id);
+      }
       // One line per per-provider secret (names and counts only, never
       // values), so a silently ignored secret is visible in Logs instead
       // of showing up as a mysteriously missing provider.
       for (final line in providerSecretDiagnostics()) {
         log(line);
       }
+      // v1.0.6: one line naming the final provider order, so a
+      // "missing provider" report is diagnosable from Logs alone.
+      log('Providers in order: ${providerOrder.map(providerById).map((p) => p.name).join(' → ')} (${providerOrder.length})');
       providerLastRefresh = Map<String, int>.from(j['providerLastRefresh'] ?? {});
       srcCache = (j['srcCache'] as Map<String, dynamic>? ?? {}).map((k, v) => MapEntry(k, Map<String, dynamic>.from(v)));
       providersExpanded = j['providersExpanded'] == true;
@@ -1183,13 +1230,42 @@ class Store extends ChangeNotifier {
     }
   }
 
+  /// Candidates the CDN tab will actually try, in the same priority
+  /// as _prepare: registered CDN configs, else the pool, else the
+  /// enabled providers' configs (CDN-type first, then TLS). Never 0
+  /// while any provider has configs.
+  int get cdnCandidateCount {
+    if (cdnLinks.isNotEmpty) return cdnLinks.length;
+    if (pool.isNotEmpty) return pool.length;
+    final all = buildBundles().expand((b) => b.links).toList();
+    final cdn = all.where(isCdnLink).length;
+    return cdn > 0 ? cdn : all.where(isTlsLink).length;
+  }
+
+  /// True when the CDN tab falls back to provider configs (no CDN
+  /// configs registered and no pool in this build).
+  bool get cdnUsingProviderFallback => cdnLinks.isEmpty && pool.isEmpty;
+
   /// After a successful connect, fill providers that still have zero
   /// configs (fresh installs, or a host that failed directly) using
   /// the fresh tunnel. This is what makes "nothing stays zero" true
   /// for a host that is unreachable without a VPN: direct fetch at
   /// startup cannot reach it, but the tunnel retry can.
+  /// v1.0.6: the first pass can race tunnel setup (the TUN routes app
+  /// traffic a moment after the core reports connected), so if zeros
+  /// remain it re-checks at 30s and 90s while still connected —
+  /// bounded, logged, and never overlapping another automatic refresh.
   void _afterConnectRefresh() {
     _autoRefresh(refreshZeroProviders);
+    for (final delay in [const Duration(seconds: 30), const Duration(seconds: 90)]) {
+      Future.delayed(delay, () {
+        if (engine.state.phase != Phase.connected && psiphon.state.phase != PsiphonPhase.connected) return;
+        final zeros = providerOrder.where((id) => id != 'fast' && providerEnabled[id] == true && providerConfigCount(id) == 0).toList();
+        if (zeros.isEmpty) return;
+        log('Post-connect refresh: still empty (${zeros.map(providerById).map((p) => p.name).join(', ')}), retrying');
+        _autoRefresh(refreshZeroProviders);
+      });
+    }
   }
 
   /// True when any non-Fast provider has a source older than 12h (or
@@ -1310,12 +1386,32 @@ class Store extends ChangeNotifier {
     e.strictVerify = strict;
     e.testUrl = testUrl;
     if (mode == 'cdn') {
-      // CDN mode uses only the registered pool, never personal configs.
-      // Your registered CDN configs first; with none, the pool's CDN (then TLS) configs.
-      e.poolUrls = cdnLinks.isEmpty ? [...pool] : [];
-      e.directLinks = [...cdnLinks];
-      e.linkFilter = cdnLinks.isEmpty ? isCdnLink : (_) => true;
-      e.fallbackFilter = cdnLinks.isEmpty ? isTlsLink : null;
+      // v1.0.6: the tab must always have something to try. Registered
+      // CDN configs first; with none, the pool's CDN (then TLS)
+      // configs; with neither (this build has no pool), the enabled
+      // providers' configs — CDN-type first, then any TLS config —
+      // with the same fronting applied. Empty clean-IP/host fields no
+      // longer mean an instant failure: the configs are tried as-is,
+      // the way MahsaNG tries its defaults with no custom IP set.
+      if (cdnLinks.isNotEmpty) {
+        e.poolUrls = [];
+        e.directLinks = [...cdnLinks];
+        e.linkFilter = (_) => true;
+        e.fallbackFilter = null;
+      } else if (pool.isNotEmpty) {
+        e.poolUrls = [...pool];
+        e.directLinks = [];
+        e.linkFilter = isCdnLink;
+        e.fallbackFilter = isTlsLink;
+      } else {
+        final all = buildBundles().expand((b) => b.links).toList();
+        final cdn = all.where(isCdnLink).toList();
+        e.poolUrls = [];
+        e.directLinks = cdn.isNotEmpty ? cdn : all.where(isTlsLink).toList();
+        e.linkFilter = (_) => true;
+        e.fallbackFilter = null;
+        if (e.directLinks.isEmpty) log('CDN mode: no provider configs available either — add a provider or CDN configs first');
+      }
       e.keepOriginal = cleanIp.isNotEmpty || frontHost.isNotEmpty;
       e.transform = (l) => applyFronting(l, ip: cleanIp, host: frontHost);
     } else if (mode == 'personal') {
