@@ -46,6 +46,9 @@ class PsiphonState {
   final DateTime? connectedAt;
   final double downSpeed, upSpeed;
   final int downTotal, upTotal;
+  // v1.0.7: same meaning as EngineState.geoLoading — the card shows
+  // a spinner for IP/Location while the background lookup runs.
+  final bool geoLoading;
   const PsiphonState({
     this.phase = PsiphonPhase.idle,
     this.message = '',
@@ -60,6 +63,7 @@ class PsiphonState {
     this.upSpeed = 0,
     this.downTotal = 0,
     this.upTotal = 0,
+    this.geoLoading = false,
   });
 }
 
@@ -461,15 +465,53 @@ class PsiphonEngine {
   /// v1.0.6: one retry after 20s when every source fails, instead of
   /// leaving the card blank forever (same verify-speedup guarantee
   /// as v1.0.5: this never blocks "Connected").
+  /// v1.0.7: flips only the geoLoading flag on the current state,
+  /// keeping every other field (speeds, totals, ports) intact.
+  void _setGeoLoading(bool v) {
+    final c = _s;
+    _set(PsiphonState(
+      phase: c.phase,
+      message: c.message,
+      socksPort: c.socksPort,
+      httpPort: c.httpPort,
+      exitIp: c.exitIp,
+      location: c.location,
+      region: c.region,
+      pingMs: c.pingMs,
+      connectedAt: c.connectedAt,
+      downSpeed: c.downSpeed,
+      upSpeed: c.upSpeed,
+      downTotal: c.downTotal,
+      upTotal: c.upTotal,
+      geoLoading: v,
+    ));
+  }
+
+  int _geoGen = 0;
+
   Future<void> _refreshGeo() async {
     final at = _s.connectedAt;
+    final gen = ++_geoGen;
+    // Only this generation may clear the flag: a stale lookup must
+    // never switch off a newer session's spinner.
+    void clear() {
+      if (_geoGen == gen && _s.connectedAt == at) _setGeoLoading(false);
+    }
+
+    _setGeoLoading(true);
     var geo = await _lookupIp();
     if (geo == null) {
       await Future.delayed(const Duration(seconds: 20));
-      if (!_wanted || _s.phase != PsiphonPhase.connected || _s.connectedAt != at) return;
+      if (!_wanted || _s.phase != PsiphonPhase.connected || _s.connectedAt != at) {
+        clear();
+        return;
+      }
       geo = await _lookupIp();
     }
-    if (geo == null || !_wanted || _s.phase != PsiphonPhase.connected || _s.connectedAt != at) return;
+    if (geo == null || !_wanted || _s.phase != PsiphonPhase.connected || _s.connectedAt != at) {
+      clear();
+      return;
+    }
     final cur = _s;
     _set(PsiphonState(
       phase: cur.phase,
@@ -485,6 +527,7 @@ class PsiphonEngine {
       upSpeed: cur.upSpeed,
       downTotal: cur.downTotal,
       upTotal: cur.upTotal,
+      geoLoading: false,
     ));
   }
 
