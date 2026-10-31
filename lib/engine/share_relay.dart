@@ -89,12 +89,30 @@ class ShareRelay {
     _sub = srv.listen(_handle);
   }
 
+  /// LAN addresses the joiner can actually reach: private ranges
+  /// only, and never the VPN tunnel or cellular interfaces. The old
+  /// version listed every non-loopback IPv4, so the card advertised
+  /// the phone's public cellular IP and the tunnel's own address —
+  /// neither is reachable from another phone on the Wi-Fi, and the
+  /// public one looked like "the Share IP" while it could never work.
   Future<List<String>> _lanIps() async {
     final out = <String>[];
+    bool isPrivate(String ip) {
+      final p = ip.split('.').map(int.tryParse).toList();
+      if (p.length != 4 || p.any((x) => x == null)) return false;
+      final a = p[0]!, b = p[1]!;
+      if (a == 10) return true;
+      if (a == 172 && b >= 16 && b <= 31) return true;
+      if (a == 192 && b == 168) return true;
+      return false;
+    }
+
     try {
       for (final ni in await NetworkInterface.list()) {
+        final name = ni.name.toLowerCase();
+        if (name.contains('tun') || name.contains('vpn') || name.contains('ppp') || name.contains('dummy') || name == 'lo') continue;
         for (final a in ni.addresses) {
-          if (a.type == InternetAddressType.IPv4 && !a.isLoopback) out.add(a.address);
+          if (a.type == InternetAddressType.IPv4 && !a.isLoopback && isPrivate(a.address)) out.add(a.address);
         }
       }
     } catch (_) {}
