@@ -1521,6 +1521,15 @@ class _AiChatState extends State<AiChatPage> {
         var triedMismatch = false;
         var failDetail = '';
         var connected = false;
+        // v10.1.6: a failed round no longer ends the request.
+        // The engine remembers core-rejected and failed links
+        // (see _badInvalid), so a fresh round over the same
+        // bundles samples DIFFERENT configs instead of
+        // re-grinding the same rotten ones — up to 3 failed
+        // rounds before the chat reports the failure. The
+        // country-mismatch path still excludes just that server
+        // and retries (up to 10 rounds total).
+        var failRounds = 0;
         for (var round = 0; round < 10 && !_connectCancelled; round++) {
           final bundles = (a.bundles ?? const <ProviderBundle>[])
               .map((b) => ProviderBundle(
@@ -1528,7 +1537,7 @@ class _AiChatState extends State<AiChatPage> {
               .where((b) => b.links.isNotEmpty)
               .toList();
           if (bundles.isEmpty) break;
-          final ok = await s.connectAutoBundles(bundles);
+          final ok = await s.connectAutoBundles(bundles, keepBad: round > 0);
           if (!mounted) {
             await engineSub.cancel();
             return;
@@ -1536,7 +1545,8 @@ class _AiChatState extends State<AiChatPage> {
           if (_connectCancelled) break;
           if (!ok) {
             failDetail = s.engine.state.message;
-            break;
+            if (++failRounds >= 3) break;
+            continue;
           }
           if (a.country != null && a.country!.isNotEmpty) {
             final okGeo = await _verifyExitCountry(a.country!);
