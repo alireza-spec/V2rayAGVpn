@@ -130,6 +130,10 @@ class EngineState {
   final int step; // 0 fetch, 1 test, 2 connect, 3 verify
   final String message;
   final String? configName, exitIp, location, realIp, proxyInfo, providerName;
+  // v10.1.1: the exit country code (lowercase, e.g. 'us'), for the
+  // Home button's flag wash. Separate from location (which embeds
+  // a flag emoji + name) so the button never has to parse text.
+  final String? countryCode;
   final bool tunOk;
   // v1.0.7: true while the background geo lookup for the current
   // session is still running. The card shows a small spinner in
@@ -150,6 +154,7 @@ class EngineState {
     this.realIp,
     this.proxyInfo,
     this.providerName,
+    this.countryCode,
     this.tunOk = false,
     this.geoLoading = false,
     this.delayMs,
@@ -292,7 +297,7 @@ class PoolEngine {
 
   Phase _phase = Phase.idle;
   String _msg = '';
-  String? _name, _ip, _loc, _realIp, _proxyInfo;
+  String? _name, _ip, _loc, _realIp, _proxyInfo, _cc;
   int? _delay;
   SubInfo? _sub;
   CoreStatus _traffic = const CoreStatus();
@@ -329,6 +334,7 @@ class PoolEngine {
         realIp: _realIp,
         proxyInfo: _proxyInfo,
         providerName: _bundleName,
+        countryCode: _cc,
         tunOk: _tunOk,
         geoLoading: _geoLoading,
         delayMs: _delay,
@@ -419,6 +425,7 @@ class PoolEngine {
         'name': _name,
         'ip': _ip,
         'loc': _loc,
+        'cc': _cc,
         'delay': _delay,
         'pingOk': _pingOk,
         'at': _connectedAt?.millisecondsSinceEpoch,
@@ -435,6 +442,7 @@ class PoolEngine {
     _name = j['name'] as String?;
     _ip = j['ip'] as String?;
     _loc = j['loc'] as String?;
+    _cc = _normCc(j['cc']);
     _delay = (j['delay'] as num?)?.toInt();
     _pingOk = j['pingOk'] == true;
     _proxyInfo = j['proxyInfo'] as String?;
@@ -460,6 +468,7 @@ class PoolEngine {
       if (geo != null && (geo['ip'] ?? '').isNotEmpty) {
         _ip = geo['ip'];
         _loc = '${flagOf(geo['cc'] ?? '')} ${geo['loc'] ?? ''}'.trim();
+        _cc = _normCc(geo['cc']);
         _emit();
       }
     } catch (_) {}
@@ -477,7 +486,7 @@ class PoolEngine {
     _bad.clear();
     _ranked = [];
     _cur = null;
-    _name = _ip = _loc = _proxyInfo = null;
+    _name = _ip = _loc = _proxyInfo = _cc = null;
     _restoredLink = null;
     _delay = null;
     _sub = null;
@@ -528,7 +537,7 @@ class PoolEngine {
       _live = null;
       _sub = null;
       _subUrl = null;
-      _name = _ip = _loc = _proxyInfo = null;
+      _name = _ip = _loc = _proxyInfo = _cc = null;
       _delay = null;
       _connectedAt = null;
       _b0 = _bl = null;
@@ -701,6 +710,7 @@ class PoolEngine {
     _subUrl = c.sub.url;
     _ip = p.geo?['ip'];
     _loc = '${flagOf(p.geo?['cc'] ?? '')} ${p.geo?['loc'] ?? ''}'.trim();
+    _cc = _normCc(p.geo?['cc']);
     _pingOk = p.ping > 0;
     _delay = p.ping > 0 ? p.ping : c.delayMs;
     _fails = 0;
@@ -835,6 +845,7 @@ class PoolEngine {
     }
     _ip = geo['ip'];
     _loc = '${flagOf(geo['cc'] ?? '')} ${geo['loc'] ?? ''}'.trim();
+    _cc = _normCc(geo['cc']);
     _geoLoading = false;
     log('Location: $_loc');
     _emit();
@@ -1375,6 +1386,13 @@ class PoolEngine {
 }
 
 /// Country flag emoji from a two-letter country code ('' if unknown).
+/// Normalizes a geo country code for the flag sprite: lowercase,
+/// exactly 2 letters, or null when there is none.
+String? _normCc(Object? cc) {
+  final c = '${cc ?? ''}'.trim().toLowerCase();
+  return RegExp(r'^[a-z]{2}$').hasMatch(c) ? c : null;
+}
+
 String flagOf(String cc) {
   final c = cc.toUpperCase();
   if (!RegExp(r'^[A-Z]{2}$').hasMatch(c)) return '';
