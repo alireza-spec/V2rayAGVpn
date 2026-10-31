@@ -70,6 +70,131 @@ class Candidate {
   Candidate(this.link, this.remark, this.config, this.sub);
 }
 
+/// v10.1.6: structural pre-check for a parsed config JSON. The
+/// core rejects configs with missing outbound fields (its native
+/// parser fails them), and free subscriptions are full of those:
+/// without this check the engine burns a core start per rotten
+/// config. This is deliberately forgiving — unknown protocols
+/// pass, and only a clearly missing address/port/credential for
+/// a known protocol fails — because the core start itself stays
+/// the final gate; this just skips the obviously dead ones fast.
+bool configLooksValid(String cfg) {
+  try {
+    final d = jsonDecode(cfg);
+    if (d is! Map<String, dynamic>) return false;
+    final obs = d['outbounds'];
+    if (obs is! List || obs.isEmpty) return false;
+    Map<String, dynamic>? proxy;
+    for (final o in obs) {
+      if (o is! Map<String, dynamic>) continue;
+      final proto = '${o['protocol'] ?? ''}'.toLowerCase();
+      if (proto == 'freedom' || proto == 'blackhole') continue;
+      proxy = o;
+      break;
+    }
+    if (proxy == null) return false;
+    final proto = '${proxy['protocol'] ?? ''}'.toLowerCase();
+    final settings = proxy['settings'];
+    if (settings is! Map<String, dynamic>) return false;
+    String? firstStr(List<Object?> xs) {
+      for (final x in xs) {
+        if (x is String && x.isNotEmpty) return x;
+      }
+      return null;
+    }
+
+    int portOf(Map<String, dynamic> m) {
+      final p = m['port'];
+      if (p is int) return p;
+      if (p is num) return p.toInt();
+      return 0;
+    }
+
+    Map<String, dynamic>? vnextEntry(Map<String, dynamic> s) {
+      final vn = s['vnext'];
+      if (vn is List && vn.isNotEmpty && vn.first is Map<String, dynamic>) {
+        return vn.first as Map<String, dynamic>;
+      }
+      return null;
+    }
+
+    Map<String, dynamic>? vnextUser(Map<String, dynamic> s) {
+      final v0 = vnextEntry(s);
+      if (v0 == null) return null;
+      final users = v0['users'];
+      if (users is List && users.isNotEmpty && users.first is Map<String, dynamic>) {
+        return users.first as Map<String, dynamic>;
+      }
+      return null;
+    }
+
+    final v0 = vnextEntry(settings);
+    final vu = vnextUser(settings);
+    final servers = settings['servers'];
+    final s0 = servers is List && servers.isNotEmpty && servers.first is Map<String, dynamic> ? servers.first as Map<String, dynamic> : null;
+    final s0u = s0 != null && s0['users'] is List && (s0['users'] as List).isNotEmpty && (s0['users'] as List).first is Map<String, dynamic>
+        ? (s0['users'] as List).first as Map<String, dynamic>
+        : null;
+    final address = firstStr([v0?['address'], settings['address'], s0?['address']]);
+    final port = v0 != null ? portOf(v0) : (portOf(settings) > 0 ? portOf(settings) : (s0 != null ? portOf(s0) : 0));
+    if (address == null || port <= 0) return false;
+    switch (proto) {
+      case 'vless':
+      case 'vmess':
+        if (firstStr([vu?['id'], settings['id'], s0u?['id']]) == null) return false;
+      case 'trojan':
+        if (firstStr([settings['password'], s0?['password']]) == null) return false;
+      case 'shadowsocks':
+        if (firstStr([settings['password'], s0?['password']]) == null) return false;
+      default:
+        break;
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// v10.1.6: the server host of a share link, for server-side geo
+/// (see _lookupServerGeo). vmess links carry base64 JSON; the
+/// rest parse as URLs.
+String? serverHostFromLink(String link) {
+  try {
+    if (link.startsWith('vmess://')) {
+      final raw = link.substring(8).split('#').first;
+      final j = jsonDecode(utf8.decode(base64.decode(base64.normalize(raw)))) as Map<String, dynamic>;
+      final add = '${j['add'] ?? ''}';
+      return add.isEmpty ? null : add;
+    }
+    final h = Uri.parse(link).host;
+    return h.isEmpty ? null : h;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// v10.1.6: shared geo-body parser for _lookupIp and
+/// _lookupServerGeo. JSON sources carry city/country; plain-IP
+/// sources answer the IP only. A failure status is never an
+/// answer (it would otherwise poison the card with an empty
+/// location).
+Map<String, String>? parseGeoBody(String body) {
+  try {
+    final d = jsonDecode(body);
+    if (d is Map<String, dynamic>) {
+      if (d['success'] == false || d['status'] == 'fail') return null;
+      final ip = '${d['ip'] ?? d['query'] ?? ''}';
+      if (ip.isEmpty) return null;
+      final loc = [d['city'], d['country'] ?? d['country_name']].where((e) => e != null && '$e'.isNotEmpty).join(', ');
+      final cc = '${d['countryCode'] ?? d['country_code'] ?? (('${d['country']}'.length == 2) ? d['country'] : '')}';
+      return {'ip': ip, 'loc': loc, 'cc': cc};
+    }
+  } catch (_) {}
+  final plain = body.trim();
+  if (RegExp(r'^\d{1,3}(\.\d{1,3}){3}$').hasMatch(plain)) return {'ip': plain, 'loc': '', 'cc': ''};
+  return null;
+}
+
 /// Subscription body -> share links (base64 or plain).
 List<String> extractLinks(String body) {
   var t = body.trim();
@@ -284,6 +409,15 @@ class PoolEngine {
   int _cTried = 0, _cStartFail = 0, _cNoTraffic = 0, _cNoProxy = 0;
   bool _lastProveNoProxy = false;
   final Set<String> _bad = {};
+  // v10.1.6: links the core itself rejected with INVALID_CONFIG.
+  // Unlike _bad (prove failures, which can be transient), a
+  // core rejection is deterministic for a given config, so these
+  // are NEVER retried in this app session: _gather skips them
+  // and _select never re-samples them. Cleared only by an app
+  // restart, which is also when provider data is re-read. This
+  // is what stops the chat (and auto) grind over the same rotten
+  // free-subscription links on every connect.
+  final Set<String> _badInvalid = {};
   List<Candidate> _ranked = [];
   Candidate? _cur;
   DateTime? _connectedAt;
@@ -377,7 +511,7 @@ class PoolEngine {
   /// by itself) whenever a restart needs fresh provider data.
   int _maxTriesPerBundle = 0;
 
-  Future<void> connectOrdered(List<ProviderBundle> bundles, {required BundleFetcher refetch, int maxTriesPerBundle = 0}) async {
+  Future<void> connectOrdered(List<ProviderBundle> bundles, {required BundleFetcher refetch, int maxTriesPerBundle = 0, bool keepBad = false}) async {
     if (_wanted) return;
     _maxTriesPerBundle = maxTriesPerBundle;
     _wanted = true;
@@ -390,7 +524,11 @@ class PoolEngine {
       _msg = 'Fetching servers';
       _emit();
       if (!proxyOnly && !await core.requestPermission()) return _fail('VPN permission was not granted');
-      _bad.clear();
+      // v10.1.6: keepBad lets the AI chat run a fresh round over
+      // the same bundles without re-grinding the configs the
+      // previous round already failed on. _badInvalid is never
+      // cleared here (see its declaration).
+      if (!keepBad) _bad.clear();
       _cTried = _cStartFail = _cNoTraffic = _cNoProxy = 0;
       _ranked = [];
       _cur = null;
@@ -638,7 +776,7 @@ class PoolEngine {
       _step = 1;
       _msg = 'Testing servers on your network';
       _emit();
-      _ranked = await _probe(c.where((x) => !_bad.contains(x.link)).toList());
+      _ranked = await _probe(c.where((x) => !_bad.contains(x.link) && !_badInvalid.contains(x.link)).toList());
       if (!_wanted) return;
     }
     var tries = 0;
@@ -655,6 +793,13 @@ class PoolEngine {
       final cfgs = [wrap(c.cfg), if (c.ipConfig != null) wrap(c.config)];
       var cfg = cfgs.first;
       var started = false;
+      // v10.1.6: a core rejection (INVALID_CONFIG) is
+      // deterministic for a given config — remember it for the
+      // whole app session so no later connect re-grinds it. The
+      // attempt loop already breaks on a non-stopping failure,
+      // so a rejected config costs at most one start per
+      // variant, never a retry spiral.
+      var invalid = false;
       for (final x in cfgs) {
         for (var a = 0; a < 2 && !started; a++) {
           try {
@@ -663,6 +808,7 @@ class PoolEngine {
             started = true;
           } catch (e) {
             final stopping = proxyOnly ? await _portOpen(10809) : (await Native.vpnActive() == true);
+            if ('$e'.contains('INVALID_CONFIG')) invalid = true;
             log('Start failed (${c.remark}): ${stopping ? 'the previous session was still stopping' : ('$e'.contains('INVALID_CONFIG') ? 'the core rejected this config' : e)}');
             if (!stopping) break;
             await _hardStop();
@@ -672,6 +818,7 @@ class PoolEngine {
       }
       if (!started) {
         _bad.add(c.link);
+        if (invalid) _badInvalid.add(c.link);
         _cStartFail++;
         continue;
       }
@@ -824,31 +971,26 @@ class PoolEngine {
   /// to the session that requested it: if a failover already moved
   /// to another server, the stale answer is dropped instead of
   /// overwriting the new session's location.
-  /// v1.0.6: two robustness fixes for the blank "-" card. In VPN
-  /// mode a direct fetch already goes through the TUN, so it is a
-  /// safe second path to the exit IP; in proxy-only mode a direct
-  /// fetch would return the real IP, so it is never used as an
-  /// exit-IP answer there. And if every source fails (the tunnel
-  /// may still be settling: routes, DNS), it retries once after
-  /// 20s instead of leaving the card blank forever. The verify
-  /// speedup from v1.0.5 is untouched: this still never blocks
-  /// "Connected".
-  /// v10.1.3: core starts now disallow the app itself, so a direct
-  /// fetch in VPN mode returns the real IP too — the fallback is
-  /// skipped in that case, exactly like proxy-only mode.
+  /// v10.1.6: the location is recorded AFTER the connection, from
+  /// the connected server — never from the requester's own network.
+  /// Two paths, in order: (1) the true exit IP through the
+  /// tunnel's local HTTP proxy, when the session has one; (2) the
+  /// connected server's own location, by asking a geo service
+  /// about the SERVER's IP (see _lookupServerGeo). A plain
+  /// requester-IP lookup (/json with no IP) is NEVER used: since
+  /// v10.1.3 the app's own traffic bypasses its own tunnel, so
+  /// that lookup returns the REAL IP — which is exactly how
+  /// v10.1.5 showed Tehran for every server. If both paths fail,
+  /// it retries once after 20s instead of leaving the card blank
+  /// forever. The verify speedup from v1.0.5 is untouched: this
+  /// still never blocks "Connected".
   Future<void> _refreshGeoInBackground(String link) async {
     Future<Map<String, String>?> fetch() async {
-      final g = await _lookupIp();
-      if (g != null) return g;
-      // v10.1.3: the direct fallback is only a safe exit-IP path
-      // while the app's own traffic traverses the TUN. Core starts
-      // now disallow the app itself (like Psiphon modes), so a
-      // direct fetch would return the REAL IP and must never pose
-      // as the exit location — skip it then, as proxyOnly does.
-      if (!proxyOnly && !blockedApps.contains('com.v2rayag.v2rayag')) {
-        return _lookupIp(direct: true);
+      if (_proxyPort != null) {
+        final g = await _lookupIp();
+        if (g != null) return g;
       }
-      return null;
+      return _lookupServerGeo(link);
     }
 
     // v1.0.7: geoLoading drives the card's spinner. The generation
@@ -1141,7 +1283,20 @@ class PoolEngine {
     // leave them out entirely, and the priority pick in _next() can
     // only choose among sampled configs. So partition first: every
     // priority link is sampled, the rest fill the remaining slots.
-    final filtered = [...directLinks].where(linkFilter).toList();
+    // v10.1.6: skip configs the core already rejected and configs
+    // with incomplete fields, so the 60-sample is spent on
+    // configs that can actually start. If filtering would empty
+    // the pool (e.g. a single Personal config), the original
+    // pool is kept so the attempt still runs and reports the
+    // real error instead of a confusing empty-pool failure.
+    var invalidSkipped = 0, invalidFields = 0;
+    final rawFiltered = [...directLinks].where(linkFilter).toList();
+    var filtered = rawFiltered.where((l) => !_badInvalid.contains(l)).toList();
+    if (filtered.isEmpty && rawFiltered.isNotEmpty) {
+      filtered = rawFiltered;
+    } else {
+      invalidSkipped += rawFiltered.length - filtered.length;
+    }
     bool isPri(String l) {
       for (final tl in variants(l)) {
         final p = core.parse(tl);
@@ -1165,7 +1320,12 @@ class PoolEngine {
     for (final l in sampled) {
       for (final tl in variants(l)) {
         final p = core.parse(tl);
-        if (p != null) out.add(Candidate(tl, p.remark, p.config, none));
+        if (p == null) continue;
+        if (!configLooksValid(p.config)) {
+          invalidFields++;
+          continue;
+        }
+        out.add(Candidate(tl, p.remark, p.config, none));
       }
     }
     log('Sources: ${urls.length} subscriptions, ${directLinks.length} direct configs');
@@ -1184,10 +1344,21 @@ class PoolEngine {
         }
         ok++;
         final links = [...r.links.where(linkFilter)]..shuffle(_rng);
-        for (final l in links) {
+        var subLinks = links.where((l) => !_badInvalid.contains(l)).toList();
+        if (subLinks.isEmpty && links.isNotEmpty) {
+          subLinks = links;
+        } else {
+          invalidSkipped += links.length - subLinks.length;
+        }
+        for (final l in subLinks) {
           for (final tl in variants(l)) {
             final p = core.parse(tl);
-            if (p != null) out.add(Candidate(tl, p.remark, p.config, r.info));
+            if (p == null) continue;
+            if (!configLooksValid(p.config)) {
+              invalidFields++;
+              continue;
+            }
+            out.add(Candidate(tl, p.remark, p.config, r.info));
           }
         }
       }
@@ -1195,6 +1366,8 @@ class PoolEngine {
     _skipped = skipped;
     _usableSubs = ok;
     log('Pool refreshed. Subscriptions: $ok usable, $skipped expired or out of data, $failed unreachable. ${out.length} configs to test');
+    if (invalidSkipped > 0) log('Skipped $invalidSkipped configs the core rejected before');
+    if (invalidFields > 0) log('Skipped $invalidFields configs with incomplete fields (the core would reject them)');
     if (out.isEmpty && fallbackFilter != null) {
       final saved = linkFilter;
       linkFilter = fallbackFilter!;
@@ -1375,8 +1548,15 @@ class PoolEngine {
     return null;
   }
 
-  /// Public IP and place, looked up by IP address. [direct] skips the core's proxy.
-  Future<Map<String, String>?> _lookupIp({bool direct = false}) async {
+  /// True exit IP and place, through the tunnel's local HTTP
+  /// proxy only. v10.1.6: when the session has no local HTTP
+  /// proxy this returns null immediately — it NEVER falls back
+  /// to a direct requester-IP lookup, because since v10.1.3 the
+  /// app's own traffic bypasses its own tunnel and a direct
+  /// lookup would report the REAL IP as the exit location (the
+  /// v10.1.5 Tehran-for-every-server bug).
+  Future<Map<String, String>?> _lookupIp() async {
+    if (_proxyPort == null) return null;
     // v1.0.5: all sources are tried concurrently; the first valid
     // answer wins. Same URLs and timeouts as before.
     // v1.0.6: more sources, because one shared tunnel exit can be
@@ -1385,26 +1565,11 @@ class PoolEngine {
     // answer the IP but no location).
     const urls = ['http://ip-api.com/json', 'https://ipwho.is/', 'https://ipinfo.io/json', 'https://api.ipify.org?format=json', 'https://api64.ipify.org?format=json', 'https://checkip.amazonaws.com', 'https://ifconfig.me/ip'];
     Future<Map<String, String>?> attempt(String u) async {
-      final c = direct ? (HttpClient()..connectionTimeout = const Duration(seconds: 4)) : _client(const Duration(seconds: 4));
+      final c = _client(const Duration(seconds: 4));
       try {
         final res = await (await c.getUrl(Uri.parse(u))).close().timeout(const Duration(seconds: 5));
         final body = await res.transform(utf8.decoder).join();
-        Map<String, dynamic>? j;
-        try {
-          final d = jsonDecode(body);
-          if (d is Map<String, dynamic>) j = d;
-        } catch (_) {}
-        if (j != null) {
-          if (j['success'] == false || j['status'] == 'fail') return null;
-          final ip = '${j['ip'] ?? j['query'] ?? ''}';
-          if (ip.isEmpty) return null;
-          final loc = [j['city'], j['country'] ?? j['country_name']].where((e) => e != null && '$e'.isNotEmpty).join(', ');
-          final cc = '${j['countryCode'] ?? j['country_code'] ?? (('${j['country']}'.length == 2) ? j['country'] : '')}';
-          return {'ip': ip, 'loc': loc, 'cc': cc};
-        }
-        final plain = body.trim();
-        if (RegExp(r'^\d{1,3}(\.\d{1,3}){3}$').hasMatch(plain)) return {'ip': plain, 'loc': '', 'cc': ''};
-        return null;
+        return parseGeoBody(body);
       } catch (_) {
         return null;
       } finally {
@@ -1417,6 +1582,87 @@ class PoolEngine {
       if (r != null) return r;
     }
     return null;
+  }
+
+  /// v10.1.6: the connected server's own IP and place. The geo
+  /// services are asked about the SERVER's IP (ip-api.com/json/
+  /// <ip>, ipwho.is/<ip>, ipinfo.io/<ip>/json), so the request
+  /// itself may go over the direct network: the answer describes
+  /// the queried server, never the requester, and the real IP
+  /// can never leak into the card through this path. The server
+  /// host comes from the connected link (falling back to the
+  /// session config's outbound address); a domain is resolved
+  /// first, because the services need a literal IP. For
+  /// CDN-fronted configs the resolved address is the front edge,
+  /// which is the best location available for that session.
+  Future<Map<String, String>?> _lookupServerGeo(String link) async {
+    var host = serverHostFromLink(link);
+    host ??= _cur != null && _cur!.link == link ? _serverHostFromCfg(_cur!.cfg) : null;
+    if (host == null || host.isEmpty) return null;
+    String? ip;
+    if (RegExp(r'^\d{1,3}(\.\d{1,3}){3}$').hasMatch(host) || host.contains(':')) {
+      ip = host;
+    } else {
+      try {
+        final addrs = await InternetAddress.lookup(host);
+        if (addrs.isEmpty) return null;
+        final v4 = addrs.where((a) => a.type == InternetAddressType.IPv4);
+        ip = (v4.isNotEmpty ? v4.first : addrs.first).address;
+      } catch (_) {
+        return null;
+      }
+    }
+    final urls = ['http://ip-api.com/json/$ip', 'https://ipwho.is/$ip', 'https://ipinfo.io/$ip/json'];
+    Future<Map<String, String>?> attempt(String u) async {
+      final c = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+      try {
+        final res = await (await c.getUrl(Uri.parse(u))).close().timeout(const Duration(seconds: 5));
+        final body = await res.transform(utf8.decoder).join();
+        return parseGeoBody(body);
+      } catch (_) {
+        return null;
+      } finally {
+        c.close(force: true);
+      }
+    }
+
+    final results = await Future.wait(urls.map(attempt));
+    for (final r in results) {
+      if (r != null) return r;
+    }
+    return null;
+  }
+
+  String? _serverHostFromCfg(String cfg) {
+    try {
+      final d = jsonDecode(cfg);
+      if (d is! Map<String, dynamic>) return null;
+      final obs = d['outbounds'];
+      if (obs is! List || obs.isEmpty) return null;
+      for (final o in obs) {
+        if (o is! Map<String, dynamic>) continue;
+        final proto = '${o['protocol'] ?? ''}'.toLowerCase();
+        if (proto == 'freedom' || proto == 'blackhole') continue;
+        final s = o['settings'];
+        if (s is! Map<String, dynamic>) return null;
+        final vn = s['vnext'];
+        if (vn is List && vn.isNotEmpty && vn.first is Map<String, dynamic>) {
+          final a = '${(vn.first as Map<String, dynamic>)['address'] ?? ''}';
+          if (a.isNotEmpty) return a;
+        }
+        final a = '${s['address'] ?? ''}';
+        if (a.isNotEmpty) return a;
+        final servers = s['servers'];
+        if (servers is List && servers.isNotEmpty && servers.first is Map<String, dynamic>) {
+          final sa = '${(servers.first as Map<String, dynamic>)['address'] ?? ''}';
+          if (sa.isNotEmpty) return sa;
+        }
+        return null;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 }
 
