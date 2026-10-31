@@ -357,6 +357,12 @@ class PoolEngine {
       _cTried = _cStartFail = _cNoTraffic = _cNoProxy = 0;
       _ranked = [];
       _cur = null;
+      // v10.1.4: a new session must never display the previous
+      // session's location: clear the card fields here (disconnect
+      // already does, but a session can also start after a failure
+      // without one). _finish fills them again on success.
+      _name = _ip = _loc = _proxyInfo = _cc = null;
+      _socksPort = null;
       await _hardStop();
       await _select(first: true);
     } catch (e) {
@@ -388,6 +394,9 @@ class PoolEngine {
       _cTried = _cStartFail = _cNoTraffic = _cNoProxy = 0;
       _ranked = [];
       _cur = null;
+      // v10.1.4: same stale-location clearing as connect().
+      _name = _ip = _loc = _proxyInfo = _cc = null;
+      _socksPort = null;
       await _hardStop();
       if (bundles.isEmpty) return _fail('No enabled provider has usable configs. Enable a provider or refresh it.');
       _enterBundle(0);
@@ -509,8 +518,24 @@ class PoolEngine {
       await core.stop();
     } catch (_) {}
     _proxyPort = null;
+    // v10.1.4: the old session is only really gone when its local
+    // proxies are gone too. _findProxy/_socksProve probe 10809
+    // (HTTP) and 10807/10808 (SOCKS): a lingering proxy from the
+    // previous tunnel answers ping and geo for the NEW session,
+    // pinning every connection to the old server's location even
+    // though the new tunnel is up. VPN mode used to wait only for
+    // the VPN flag; now it waits for the ports as well. Bounded
+    // by the same loop — a foreign listener costs at most ~3 s.
     for (var i = 0; i < 12; i++) {
-      final up = proxyOnly ? await _portOpen(10809) : (await Native.vpnActive() == true);
+      var up = proxyOnly ? await _portOpen(10809) : (await Native.vpnActive() == true);
+      if (!up && !proxyOnly) {
+        for (final p in [10807, 10808, 10809]) {
+          if (await _portOpen(p)) {
+            up = true;
+            break;
+          }
+        }
+      }
       if (!up) break;
       await Future.delayed(const Duration(milliseconds: 250));
     }
