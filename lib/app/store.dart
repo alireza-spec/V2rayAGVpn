@@ -24,7 +24,7 @@ const kBuildNum = String.fromEnvironment('BUILD_NUM', defaultValue: '0');
 // number. Keep in sync with pubspec.yaml's version (the part
 // before the +build number). kBuildNum above stays for the
 // in-app update check's digit comparison only.
-const kAppVersion = '10.1.2';
+const kAppVersion = '10.1.3';
 
 const _tr = <String, List<String>>{
   'home': ['Home', 'خانه'],
@@ -1705,6 +1705,18 @@ class Store extends ChangeNotifier {
         blocked = all.map((a) => a.pkg).where((x) => !appSet.contains(x)).toList();
       }
     }
+    // v10.1.3: the app itself always bypasses its own tunnel, exactly
+    // like the Psiphon branches already do (they pass
+    // 'com.v2rayag.v2rayag' in their blocked list). The app's own
+    // traffic — AI chat, Psiphon bootstrap — must never be forced
+    // through a half-built tunnel: while a core config is still
+    // proving, that traffic blackholes and the AI chat hangs behind
+    // model timeouts for minutes. Connection behavior is untouched:
+    // server selection, traffic proof and failover still run
+    // through the tunnel; only this app's UID traffic goes direct.
+    // (Geo's primary path uses the tunnel's local proxy, so it is
+    // unaffected; see the guard in _refreshGeoInBackground.)
+    blocked = {'com.v2rayag.v2rayag', ...blocked}.toList();
     e.blockedApps = blocked;
     e.proxyOnly = connType == 'proxy';
     e.strictVerify = strict;
