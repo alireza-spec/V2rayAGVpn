@@ -196,6 +196,20 @@ String _same(String s) => s;
 bool _all(String s) => true;
 void _noop(String s) {}
 
+/// What to try first, from the give-up counters: no local proxy on
+/// every config means the core started but nothing answered to test
+/// through (the proxy-mode trap); mostly start failures mean bad
+/// configs; otherwise the servers answer but carry no traffic.
+String diagnosisHint(int tried, int startFail, int noTraffic, int noProxy) {
+  if (noProxy > 0 && noProxy == tried) {
+    return 'No local proxy answered on any config: the core started but there was nothing to test through. Try VPN mode instead of Proxy mode, then reconnect.';
+  }
+  if (startFail > noTraffic) {
+    return 'The core rejected or failed to start most configs: refresh the providers and try again.';
+  }
+  return 'Servers answered the handshake but carried no traffic: try another provider, or one known-good config in Personal mode.';
+}
+
 class PoolEngine {
   PoolEngine(
     this.core, {
@@ -258,6 +272,12 @@ class PoolEngine {
   }
   int _skipped = 0, _usableSubs = 0;
   int _fails = 0, _step = 0, _off = 0;
+  // Give-up diagnosis counters (cumulative across providers, reset
+  // on every fresh connect): how many configs were tried, how many
+  // the core failed to start, how many started but carried no
+  // traffic, and how many had no local proxy at all to test through.
+  int _cTried = 0, _cStartFail = 0, _cNoTraffic = 0, _cNoProxy = 0;
+  bool _lastProveNoProxy = false;
   final Set<String> _bad = {};
   List<Candidate> _ranked = [];
   Candidate? _cur;
@@ -328,6 +348,7 @@ class PoolEngine {
       _emit();
       if (!proxyOnly && !await core.requestPermission()) return _fail('VPN permission was not granted');
       _bad.clear();
+      _cTried = _cStartFail = _cNoTraffic = _cNoProxy = 0;
       _ranked = [];
       _cur = null;
       await _hardStop();
@@ -358,6 +379,7 @@ class PoolEngine {
       _emit();
       if (!proxyOnly && !await core.requestPermission()) return _fail('VPN permission was not granted');
       _bad.clear();
+      _cTried = _cStartFail = _cNoTraffic = _cNoProxy = 0;
       _ranked = [];
       _cur = null;
       await _hardStop();
@@ -588,6 +610,7 @@ class PoolEngine {
     var tries = 0;
     while (_ranked.isNotEmpty && _wanted && (_maxTriesPerBundle == 0 || tries < _maxTriesPerBundle)) {
       tries++;
+      _cTried++;
       final c = _next();
       _phase = Phase.connecting;
       _step = 2;
@@ -615,6 +638,7 @@ class PoolEngine {
       }
       if (!started) {
         _bad.add(c.link);
+        _cStartFail++;
         continue;
       }
       if (!_wanted) return;
@@ -630,10 +654,13 @@ class PoolEngine {
         return;
       }
       _bad.add(c.link);
+      _cNoTraffic++;
+      if (_lastProveNoProxy) _cNoProxy++;
       try {
         await core.stop();
       } catch (_) {}
       _proxyPort = null;
+      _socksPort = null;
     }
     if (!_wanted) return;
     if (_maxTriesPerBundle > 0 && tries >= _maxTriesPerBundle && _bundles != null && _bundleIdx < _bundles!.length - 1) {
@@ -649,6 +676,10 @@ class PoolEngine {
     }
     if (first) {
       log('Gave up: every config was tried and none carried traffic');
+      // One-line diagnosis so the next "nothing connects" report is
+      // answerable from the log instead of a mystery: which stage
+      // failed, and what to try first.
+      log('Diagnosis: tried $_cTried, core failed to start $_cStartFail, no traffic $_cNoTraffic, no local proxy $_cNoProxy. ${diagnosisHint(_cTried, _cStartFail, _cNoTraffic, _cNoProxy)}');
       final msg = _bundles != null
           ? 'No enabled provider has a working server right now. Enable another provider or try again.'
           : (_usableSubs == 0 && _skipped > 0 ? 'All subscriptions are expired or out of data.' : 'No server carried real traffic. Open Logs for details.');
@@ -691,7 +722,9 @@ class PoolEngine {
   /// A changed IP address is only shown, never used as proof (some networks rotate IPs).
   Future<_Proof> _prove(Candidate c, String cfg) async {
     await Future.delayed(const Duration(milliseconds: 1200));
+    _lastProveNoProxy = false;
     bool? vpn = proxyOnly ? true : null;
+    var socksTried = false;
     for (var i = 0; i < 7 && _wanted; i++) {
       if (!proxyOnly) {
         vpn = await Native.vpnActive();
@@ -703,6 +736,16 @@ class PoolEngine {
       _proxyPort ??= await _findProxy(cfg);
       var ping = -1;
       if (_proxyPort != null) ping = await measurePing();
+      // Plugin configs expose SOCKS, never HTTP: when the HTTP ping
+      // finds nothing (the usual proxy-mode case), prove traffic
+      // with a SOCKS CONNECT instead of failing a working server.
+      // Once per candidate: the loop retries the cheap checks, not
+      // the full SOCKS handshake.
+      if (ping <= 0 && !socksTried) {
+        socksTried = true;
+        final sm = await _socksProve(cfg);
+        if (sm > 0) ping = sm;
+      }
       if (ping <= 0 && !proxyOnly) {
         final d = await core.connectedDelay();
         if (d > 0) ping = d;
@@ -711,6 +754,8 @@ class PoolEngine {
         if (_proxyPort != null) {
           final socks = await _portOpen(10808);
           _proxyInfo = 'HTTP 127.0.0.1:$_proxyPort${socks ? '  SOCKS5 127.0.0.1:10808' : ''}';
+        } else if (_socksPort != null) {
+          _proxyInfo = 'SOCKS5 127.0.0.1:$_socksPort';
         }
         // v1.0.5: the verdict is the traffic proof. The geo lookup
         // was never proof (see the doc comment above) and ip
@@ -726,7 +771,10 @@ class PoolEngine {
       await Future.delayed(const Duration(seconds: 1));
     }
     if (proxyOnly) {
-      log('${c.remark}: the local proxy did not answer or the server carried no traffic');
+      _lastProveNoProxy = _proxyPort == null && _socksPort == null;
+      log(_lastProveNoProxy
+          ? '${c.remark}: no local proxy answered (neither HTTP nor SOCKS) — the core is up but there is nothing to test through'
+          : '${c.remark}: the local proxy did not answer or the server carried no traffic');
     } else if (vpn == false) {
       log('Android never reported an active VPN. The VPN service did not start (permission, another VPN app, or app setup).');
     } else {
@@ -803,6 +851,10 @@ class PoolEngine {
   }
 
   /// The core's local HTTP proxy, if it exposes one: it is the cleanest proof a config works.
+  /// Plugin-generated configs expose SOCKS only, never HTTP, so
+  /// _prove also tries a SOCKS CONNECT (see _socksProve) when the
+  /// HTTP ping finds nothing — otherwise proxy mode could never
+  /// verify a working server.
   Future<int?> _findProxy(String? cfg) async {
     final cands = <int>{if (cfg != null && inboundPort(cfg, 'http') != null) inboundPort(cfg, 'http')!, 10809};
     for (final p in cands) {
@@ -812,6 +864,102 @@ class PoolEngine {
       _proxyPort = null;
     }
     return null;
+  }
+
+  /// SOCKS port proven by [_socksProve], for the session card.
+  int? _socksPort;
+
+  /// SOCKS traffic proof for configs with no HTTP proxy (what the
+  /// plugin generates: a SOCKS inbound only, never HTTP). Tries the
+  /// config's own SOCKS port, then the plugin's defaults 10807/10808.
+  /// A successful CONNECT to a real host means the server really
+  /// carries TCP traffic. Returns the CONNECT round-trip in ms, or
+  /// -1. In VPN mode the native side forces credentials, so the
+  /// greeting fails there and the caller falls back to its existing
+  /// checks, unchanged.
+  Future<int> _socksProve(String cfg) async {
+    final cands = <int>{
+      if (inboundPort(cfg, 'socks') != null) inboundPort(cfg, 'socks')!,
+      10807,
+      10808,
+    };
+    for (final p in cands) {
+      if (!await _portOpen(p)) continue;
+      final ms = await _socksConnectMs(p);
+      if (ms > 0) {
+        _socksPort = p;
+        return ms;
+      }
+    }
+    return -1;
+  }
+
+  /// One SOCKS5 CONNECT to cp.cloudflare.com:443 through
+  /// 127.0.0.1:[port]. A single subscription drives the whole
+  /// exchange (greeting, then reply): the reply's bound address may
+  /// arrive in the same segment as its head, so reading head and
+  /// tail separately would drop bytes and hang. Returns the CONNECT
+  /// round-trip in ms, or -1 on any failure.
+  Future<int> _socksConnectMs(int port) async {
+    Socket? s;
+    try {
+      s = await Socket.connect('127.0.0.1', port, timeout: const Duration(seconds: 1));
+      final sock = s!;
+      final done = Completer<int>();
+      final buf = <int>[];
+      final sw = Stopwatch();
+      var phase = 0; // 0 greeting, 1 reply
+      var replyNeed = 0;
+      late StreamSubscription sub;
+      Timer? timer;
+      void fail() {
+        if (!done.isCompleted) done.complete(-1);
+      }
+
+      timer = Timer(const Duration(seconds: 6), fail);
+      sub = sock.listen((chunk) {
+        buf.addAll(chunk);
+        if (phase == 0 && buf.length >= 2) {
+          if (buf[0] != 0x05 || buf[1] != 0x00) {
+            fail();
+            return;
+          }
+          buf.removeRange(0, 2);
+          phase = 1;
+          final host = utf8.encode('cp.cloudflare.com');
+          sw.start();
+          sock.add([0x05, 0x01, 0x00, 0x03, host.length, ...host, 0x01, 0xBB]);
+        }
+        if (phase == 1) {
+          if (replyNeed == 0 && buf.length >= 4) {
+            final atyp = buf[3];
+            replyNeed = atyp == 0x01 ? 10 : atyp == 0x04 ? 22 : (atyp == 0x03 && buf.length >= 5 ? 7 + buf[4] : -1);
+            if (replyNeed == -1) {
+              fail();
+              return;
+            }
+          }
+          if (replyNeed > 0 && buf.length >= replyNeed) {
+            if (buf[0] != 0x05 || buf[1] != 0x00) {
+              fail();
+              return;
+            }
+            if (!done.isCompleted) done.complete(sw.elapsedMilliseconds);
+          }
+        }
+      }, onError: (_) => fail(), onDone: () => fail());
+      sock.add([0x05, 0x01, 0x00]);
+      final ms = await done.future;
+      await sub.cancel();
+      timer?.cancel();
+      return ms;
+    } catch (_) {
+      return -1;
+    } finally {
+      try {
+        s?.destroy();
+      } catch (_) {}
+    }
   }
 
   HttpClient _client(Duration ct) {
