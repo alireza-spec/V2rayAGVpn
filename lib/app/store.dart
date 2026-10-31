@@ -305,7 +305,14 @@ const _tr = <String, List<String>>{
   'aikey_own': ['Your own key is set on this phone.', 'کلید خودتان روی همین گوشی تنظیم شده است.'],
   'aikey_builtin': ['Built-in project key is active.', 'کلید داخلی پروژه فعال است.'],
   'aikey_none': ['No key yet — AI chat will explain how to set one.', 'هنوز کلیدی نیست — چت هوش مصنوعی نحوه تنظیم آن را توضیح می‌دهد.'],
-  'aimodel': ['Model (GLM-4.7 Flash is the default — the newer free model)', 'مدل (پیش‌فرض GLM-4.7 Flash است — مدل رایگان جدیدتر)'],
+  'aimodel': ['Model (GLM-4.5 Flash is the default — changeable)', 'مدل (پیش‌فرض GLM-4.5 Flash است — قابل تغییر)'],
+  'gonkakey': ['GonkaRouter API key', 'کلید API گونکا راوتر'],
+  'gonkakey_h': ['Optional: the GonkaRouter key from gonkarouter.io (or the GONKA_API_KEY repo secret, baked at build). Overrides the baked key on this device.', 'اختیاری: کلید گونکا راوتر از gonkarouter.io (یا سکرت GONKA_API_KEY که در بیلد پخته می‌شود). روی همین گوشی جایگزین کلید پخته‌شده می‌شود.'],
+  'gonkanokey': ['No GonkaRouter key set. Add it in Settings → AI, or set the GONKA_API_KEY repo secret and rebuild.', 'کلید گونکا راوتر تنظیم نشده. آن را در Settings → AI وارد کنید، یا سکرت GONKA_API_KEY را بگذارید و دوباره بیلد بگیرید.'],
+  'gonkacredit': ['AI credit exhausted — top up the provider account.', 'اعتبار هوش مصنوعی تمام شده — حساب ارائه‌دهنده را شارژ کنید.'],
+  'aionline': ['Online', 'آنلاین'],
+  'aioffline': ['Offline — no key', 'آفلاین — بدون کلید'],
+  'aiattachlogs': ['Attach current logs', 'پیوست لاگ‌های فعلی'],
   'airemote': ['AI remote config URL (optional)', 'آدرس فایل تنظیمات از راه دور هوش مصنوعی (اختیاری)'],
   'airemote_h': ['A JSON file you host anywhere (for example {"key": "…", "base_url": "…", "model": "…"}). When AI work starts, the app fetches it once and applies the key, base URL and model — so a rotated key reaches all phones with no new app version. Empty = off. Note: anyone with this URL can read the key inside it, just like a key baked into the app.', 'یک فایل JSON که هرجا می‌خواهید میزبانی می‌کنید (مثلاً {"key": "…", "base_url": "…", "model": "…"}). موقع شروع کار با هوش مصنوعی، اپ یک بار آن را می‌خواند و کلید، آدرس پایه و مدل را اعمال می‌کند — پس کلید چرخانده‌شده بدون نسخه جدید اپ به همه گوشی‌ها می‌رسد. خالی = خاموش. توجه: هرکس این آدرس را داشته باشد می‌تواند کلید داخلش را بخواند، درست مثل کلیدی که داخل اپ جاسازی شده است.'],
   'airemoteempty': ['No remote config URL is set.', 'آدرس تنظیمات از راه دور تنظیم نشده است.'],
@@ -317,6 +324,31 @@ const _tr = <String, List<String>>{
   'aiforbidden': ['AI access forbidden (HTTP 403). The key may not have access to this model.', 'دسترسی به هوش مصنوعی ممنوع است (خطای HTTP 403). شاید کلید به این مدل دسترسی ندارد.'],
   'aiserver': ['AI server error — try again shortly', 'خطای سرور هوش مصنوعی — کمی بعد دوباره تلاش کنید'],
   'ainet': ['Network error reaching the AI service. Check your connection (if the AI endpoint is filtered, connect the VPN first).', 'خطای شبکه در رسیدن به سرویس هوش مصنوعی. اتصال را بررسی کنید (اگر آدرس هوش مصنوعی فیلتر است، اول VPN را وصل کنید).'],
+  'ainetconn': ['Network error reaching the AI service even though you are connected — this server may block it. Try another server, or briefly disconnect and retry.', 'خطای شبکه در رسیدن به سرویس هوش مصنوعی با اینکه وصل هستید — شاید این سرور جلویش را گرفته است. سرور دیگری را امتحان کنید، یا لحظه‌ای قطع کنید و دوباره تلاش کنید.'],
+  'aifilter': ['The AI provider refused this question (its safety filter flagged the wording). Try rephrasing it — for example, ask about the feature in general terms.', 'ارائه‌دهنده هوش مصنوعی این سؤال را رد کرد (فیلتر ایمنی‌اش عبارت‌بندی را حساس تشخیص داد). سؤال را جور دیگری بپرسید — مثلاً درباره کلیت قابلیت بپرسید.'],
+  'aiwhere': ['You are connected to', 'شما به این وصل هستید'],
+  'ainotconn': ['You are not connected.', 'شما وصل نیستید.'],
+  'aiconnecting': ['Connecting you to', 'در حال اتصال شما به'],
+  'aiconnected': ['Connected to', 'وصل شدید به'],
+  'aiconnectfail': ['Could not connect:', 'اتصال ممکن نشد:'],
+  'aiconnectwait': ['Still connecting — check the Home tab for the result.', 'هنوز در حال اتصال است — نتیجه را در تب خانه ببینید.'],
+  'aifound': ['Found these servers:', 'این سرورها پیدا شد:'],
+  'ainofound': ['No server found for that country yet. Try Update all in the Providers tab, then ask again.', 'هنوز سروری برای آن کشور پیدا نشد. اول در تب پروایدرها «به‌روزرسانی همه» را بزنید، بعد دوباره بپرسید.'],
+  'aidisconnected': ['Disconnected.', 'قطع شد.'],
+  'aimodeset': ['Mode set to', 'حالت تنظیم شد به'],
+  'nologs': ['No logs yet.', 'هنوز لاگی نیست.'],
+  'logdetail': ['Full logs', 'لاگ کامل'],
+  'logvital': ['Important only', 'فقط مهم‌ها'],
+  'logexport': ['Export logs as .txt', 'خروجی لاگ به‌صورت txt'],
+  'logexported': ['Logs saved.', 'لاگ‌ها ذخیره شد.'],
+  'logvitalempty': ['No important events yet — tap the bug icon for the full log.', 'هنوز رویداد مهمی نیست — برای لاگ کامل آیکن سوسک را بزنید.'],
+  'aipsi': ['VPN is off, so I am starting Psiphon in proxy mode just for this answer…', 'چون VPN خاموش است، سایفون را فقط برای همین پاسخ در حالت پروکسی روشن می‌کنم…'],
+  'aipsifail': ['Psiphon could not start, so the AI service is unreachable while the VPN is off. Connect the VPN (or Psiphon) and try again.', 'سایفون روشن نشد، پس تا وقتی VPN خاموش است به سرویس هوش مصنوعی دسترسی نیست. VPN (یا سایفون) را وصل کنید و دوباره تلاش کنید.'],
+  'aipsi_set': ['Use Psiphon for AI when VPN is off', 'وقتی VPN خاموش است، برای هوش مصنوعی از سایفون استفاده کن'],
+  'aipsi_set_h': ['When the AI endpoint is unreachable with the VPN off, the chat starts Psiphon in proxy mode for that answer only, and stops it when the chat closes.', 'وقتی با VPN خاموش به هوش مصنوعی دسترسی نیست، چت سایفون را فقط برای همان پاسخ در حالت پروکسی روشن می‌کند و با بستن چت خاموشش می‌کند.'],
+  'shareaddr_h': ['Give this address to the other phone — this is the Share IP they must enter:', 'این آدرس را به گوشی دیگر بدهید — همین آیپی اشتراکی است که باید وارد کنند:'],
+  'shareaddr_n': ['The other phone must be on the same Wi-Fi or hotspot as this phone.', 'گوشی دیگر باید به همان وای‌فای یا هات‌اسپاتی وصل باشد که این گوشی به آن وصل است.'],
+  'sharehost_h': ['The Share IP shown on the sharer’s Share VPN page (the SOCKS5 address).', 'آیپی اشتراکی که در صفحه Share VPN گوشی اشتراک‌گذارنده نمایش داده می‌شود (همان آدرس SOCKS5).'],
 };
 
 class Store extends ChangeNotifier {
@@ -494,11 +526,26 @@ class Store extends ChangeNotifier {
   // The remote file is only as private as its URL — anyone
   // with the URL can read the key inside, the same exposure
   // as a key baked into a public APK.
-  String aiModel = 'glm-4.7-flash';
+  // Chat-picked Z.ai model. Fresh installs default to glm-4.5-flash
+  // (the user's chosen default); existing installs keep their saved
+  // pick, which is never force-migrated.
+  String aiModel = 'glm-4.5-flash';
+  // AI backend: 'zai' or 'gonka'. GonkaRouter's own picked model
+  // lives separately so switching back never sends a Gonka model
+  // ID to Z.ai (or vice versa).
+  String aiProvider = 'zai';
+  String gonkaModel = 'zai-org/GLM-5.3-Flash';
+  String gonkaApiKey = '';
   String aiRemoteUrl = '';
   String aiRemoteKey = '';
   String aiRemoteBase = '';
   String aiRemoteModel = '';
+  // AI via Psiphon when the VPN is off: the AI endpoint is filtered
+  // on the bare network exactly when the user needs help most, so
+  // the chat may start Psiphon in proxy form for one answer (local
+  // ports only, no VPN layer, no mode change) and stop it when the
+  // chat closes. Off means the chat just reports the network error.
+  bool aiViaPsiphon = true;
   // v1.0.7: last-used Share-joiner values, so the form is prefilled.
   // The live session itself is `single` (a socks:// link).
   String sharedProxyHost = '';
@@ -661,11 +708,15 @@ class Store extends ChangeNotifier {
       useIpv6 = j['useIpv6'] == true;
       if (j['userHosts'] is List) userHosts = List<String>.from(j['userHosts']);
       aiApiKey = j['aiApiKey'] ?? '';
-      aiModel = j['aiModel'] ?? 'glm-4.7-flash';
+      aiModel = j['aiModel'] ?? 'glm-4.5-flash';
+      aiProvider = j['aiProvider'] ?? 'zai';
+      gonkaModel = j['gonkaModel'] ?? 'zai-org/GLM-5.3-Flash';
+      gonkaApiKey = j['gonkaApiKey'] ?? '';
       aiRemoteUrl = j['aiRemoteUrl'] ?? '';
       aiRemoteKey = j['aiRemoteKey'] ?? '';
       aiRemoteBase = j['aiRemoteBase'] ?? '';
       aiRemoteModel = j['aiRemoteModel'] ?? '';
+      aiViaPsiphon = j['aiViaPsiphon'] ?? true;
       sharedProxyHost = j['sharedProxyHost'] ?? '';
       sharedProxyPort = j['sharedProxyPort'] ?? 18080;
       sharedProxyUser = j['sharedProxyUser'] ?? '';
@@ -695,7 +746,7 @@ class Store extends ChangeNotifier {
         'providerLastRefresh': providerLastRefresh, 'srcCache': srcCache, 'providersExpanded': providersExpanded, 'connType': connType, 'appMode': appMode, 'appSet': appSet.toList(),
         'cdnLinks': cdnLinks, 'fragment': fragment, 'fragAll': fragAll, 'fragLen': fragLen, 'fragInt': fragInt, 'testUrl': testUrl, 'autoSortAfterTest': autoSortAfterTest, 'deleteConfirm': deleteConfirm,
         'subFirst': subFirst, 'subLinks': subLinks, 'subRemoved': subRemoved,
-        'useIpv6': useIpv6, 'userHosts': userHosts, 'aiApiKey': aiApiKey, 'aiModel': aiModel, 'aiRemoteUrl': aiRemoteUrl, 'aiRemoteKey': aiRemoteKey, 'aiRemoteBase': aiRemoteBase, 'aiRemoteModel': aiRemoteModel, 'sharedProxyHost': sharedProxyHost, 'sharedProxyPort': sharedProxyPort, 'sharedProxyUser': sharedProxyUser, 'sharedProxyPass': sharedProxyPass, 'sharePort': sharePort,
+        'useIpv6': useIpv6, 'userHosts': userHosts, 'aiApiKey': aiApiKey, 'aiModel': aiModel, 'aiProvider': aiProvider, 'gonkaModel': gonkaModel, 'gonkaApiKey': gonkaApiKey, 'aiRemoteUrl': aiRemoteUrl, 'aiRemoteKey': aiRemoteKey, 'aiRemoteBase': aiRemoteBase, 'aiRemoteModel': aiRemoteModel, 'aiViaPsiphon': aiViaPsiphon, 'sharedProxyHost': sharedProxyHost, 'sharedProxyPort': sharedProxyPort, 'sharedProxyUser': sharedProxyUser, 'sharedProxyPass': sharedProxyPass, 'sharePort': sharePort,
       }));
     } catch (_) {}
     notifyListeners();
@@ -2022,6 +2073,40 @@ class Store extends ChangeNotifier {
   String get aiBase => aiRemoteBase.isNotEmpty ? aiRemoteBase : bakedAiBase;
   String get aiModelEff => aiRemoteModel.isNotEmpty ? aiRemoteModel : aiModel;
   bool get aiReady => aiKey.isNotEmpty;
+
+  /// GonkaRouter (second AI backend, OpenAI-compatible): base/key
+  /// baked at build time from the GONKA_BASE_URL / GONKA_API_KEY
+  /// repo secrets, with an in-app key override on this device.
+  /// Same no-rebuild story as the Z.ai key: a secret rotation
+  /// alone never reaches installed apps.
+  static String get bakedGonkaBase {
+    try {
+      const v = String.fromEnvironment('GONKA_BASE_URL_B64', defaultValue: '');
+      if (v.isEmpty) return 'https://api.gonkarouter.io/v1';
+      return utf8.decode(base64.decode(base64.normalize(v)));
+    } catch (_) {
+      return 'https://api.gonkarouter.io/v1';
+    }
+  }
+
+  static String _bakedGonkaKey() {
+    try {
+      const v = String.fromEnvironment('GONKA_API_KEY_B64', defaultValue: '');
+      if (v.isEmpty) return '';
+      return utf8.decode(base64.decode(base64.normalize(v)));
+    } catch (_) {
+      return '';
+    }
+  }
+
+  String get gonkaBase => bakedGonkaBase;
+  String get gonkaKey => gonkaApiKey.trim().isNotEmpty ? gonkaApiKey.trim() : _bakedGonkaKey();
+  bool get gonkaReady => gonkaKey.isNotEmpty;
+
+  /// Effective model for the current provider: Gonka models are
+  /// picked in chat only (the Z.ai remote config never overrides
+  /// them); Z.ai keeps remote-then-picked.
+  String get aiChatModel => aiProvider == 'gonka' ? gonkaModel : aiModelEff;
 
   /// Fetches the remote AI config JSON once (called when AI work
   /// starts, and from the manual refresh button). Accepted fields
