@@ -22,6 +22,27 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+      - name: Prepare release keystore
+        # v10.1.2: when the keystore secrets exist, every release is
+        # signed with the same keystore, so users update instead of
+        # reinstalling. When they are absent (v10.1.2 shipped without
+        # stable signing), this step is skipped and Gradle falls back
+        # to debug signing. The keystore lives only in repo secrets;
+        # it is decoded here and never printed.
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then echo "missing KEYSTORE_BASE64 secret"; exit 1; fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > android/app/v2rayag-release.p12
+          echo "KEYSTORE_FILE=$PWD/android/app/v2rayag-release.p12" >> $GITHUB_ENV
+          echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> $GITHUB_ENV
+          echo "KEY_ALIAS=$KEY_ALIAS" >> $GITHUB_ENV
+          echo "KEY_PASSWORD=$KEY_PASSWORD" >> $GITHUB_ENV
+          echo "V2RAYAG_RELEASE_SIGNING=true" >> $GITHUB_ENV
       - name: Run tests
         run: flutter test
         continue-on-error: true
