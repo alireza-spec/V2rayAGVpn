@@ -25,8 +25,8 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 
 import '../app/store.dart';
 import '../engine/pool_engine.dart';
+import '../engine/providers.dart';
 import '../engine/psiphon_engine.dart';
-import '../engine/tcp_probe.dart';
 import 'speed_page.dart';
 
 /// Strips a model's thinking trace from its reply. GLM models
@@ -278,30 +278,34 @@ String smartTitle(String q, bool fa) {
 
 enum _ActionKind { find, connect, disconnect, mode, psiphon }
 
+/// v10.1.2: thrown when the user taps Cancel on the thinking row.
+/// _send catches it before any network/psiphon fallback, so a
+/// cancelled generation posts "Cancelled", never a failure or a
+/// Psiphon detour.
+class _ChatCancelled implements Exception {}
+
 class _Action {
   final _ActionKind kind;
-  final String? link, remark, message, mode, country;
+  final String? message, mode, country;
   // "disconnect and connect to X": stop the current tunnel
   // first, then connect — one message, one sequence.
   final bool disconnectFirst;
-  // Ordered connect candidates (best first) for the
-  // country-verified loop: a failed or wrong-country server
-  // falls through to the next one instead of giving up.
-  // v10.1.1: the TEST pool (up to 80), not the attempt list —
-  // _runAction probes this pool first and attempts only what
-  // passed, up to 25.
-  final List<ChatCand>? candidates;
+  // v10.1.2: Automatic-mode bundles for the connect loop (all
+  // providers, country-filtered, ordered, deduped). _runAction
+  // hands them to the engine's Automatic flow instead of
+  // probing them itself and attempting Personal singles: the
+  // old probe-only filter stranded on one core-rejected config
+  // while the providers' servers went untried.
+  final List<ProviderBundle>? bundles;
   // v10.1.1: "fast and strong" request → V2rayAG-first order;
   // otherwise the country order (Fast/AI first, V2rayAG last).
   final bool fastStrong;
   const _Action(this.kind,
-      {this.link,
-      this.remark,
-      this.message,
+      {this.message,
       this.mode,
       this.country,
       this.disconnectFirst = false,
-      this.candidates,
+      this.bundles,
       this.fastStrong = false});
 }
 
@@ -475,14 +479,15 @@ _Action? _actionFor(Store s, String q) {
     }
   }
   if (!wantsConnect && !wantsFind) return null;
-  // Candidates: every config of the requested country (by name,
-  // flag or real location), ordered so the test phase tries the
-  // most promising providers first. The test pool is capped at
-  // 80: the app tests first and only attempts what passed, so a
-  // pool of thousands would cost minutes of probing for nothing.
-  // Servers already known to carry no traffic sort last, so a
-  // retry naturally tries someone else instead of the same dead
-  // one.
+  // Candidates for the find answer: every config of the
+  // requested country (by name, flag or real location) from the
+  // enabled providers, ordered so the most promising providers
+  // come first. Servers already known to carry no traffic sort
+  // last, so a retry naturally tries someone else instead of
+  // the same dead one. The CONNECT action below does not use
+  // this list: it searches every provider (see
+  // filterChatBundles), because an explicit connect request
+  // must not be stranded by the panel's ticks.
   final fastStrong = isFastStrong(q, low);
   final all = <ChatCand>[];
   for (final b in s.buildBundles()) {
@@ -495,17 +500,15 @@ _Action? _actionFor(Store s, String q) {
   }
   final ordered = orderChatCandidates(all, fastStrong);
   if (wantsConnect) {
-    if (ordered.isEmpty) {
+    final bundles = filterChatBundles(s.allBundles(), code, fastStrong);
+    if (bundles.isEmpty) {
       return _Action(_ActionKind.find, message: s.tLang('ainofound', fa));
     }
-    final first = ordered.first;
     return _Action(_ActionKind.connect,
-        link: first.link,
-        remark: _remarkOf(first.link),
         country: code,
         disconnectFirst: hasDisconnect,
         fastStrong: fastStrong,
-        candidates: ordered.take(80).toList());
+        bundles: bundles);
   }
   if (ordered.isEmpty) {
     return _Action(_ActionKind.find, message: s.tLang('ainofound', fa));
@@ -569,6 +572,34 @@ List<ChatCand> orderChatCandidates(List<ChatCand> cands, bool fastStrong) {
     return (a.ms ?? 1 << 30).compareTo(b.ms ?? 1 << 30);
   });
   return sorted;
+}
+
+/// v10.1.2: the AI connect pool, as Automatic-mode bundles: every
+/// provider's configs for the requested country (or all configs
+/// when no country was named), each link once across providers,
+/// bundles in the user's provider order (Fast/AI first for a
+/// country request, V2rayAG first for a fast-and-strong one).
+/// Pure, so it is unit-testable without a Store.
+List<ProviderBundle> filterChatBundles(
+    List<ProviderBundle> bundles, String? code, bool fastStrong) {
+  final seen = <String>{};
+  final out = <ProviderBundle>[];
+  final ordered = [...bundles]
+    ..sort((a, b) => providerRank(a.id, fastStrong)
+        .compareTo(providerRank(b.id, fastStrong)));
+  for (final b in ordered) {
+    final links = <String>[];
+    for (final l in b.links) {
+      if (code != null &&
+          code.isNotEmpty &&
+          !_remarkMatchesCountry(_remarkOf(l), code)) {
+        continue;
+      }
+      if (seen.add(l)) links.add(l);
+    }
+    if (links.isNotEmpty) out.add(ProviderBundle(b.id, b.name, links));
+  }
+  return out;
 }
 
 /// Ready questions: the ones users actually ask first. Tapping one
@@ -721,6 +752,12 @@ class _AiChatState extends State<AiChatPage> {
   bool actionProgressTesting = false;
   bool actionProgressCancellable = false;
   bool _connectCancelled = false;
+  // v10.1.2: thinking-row Cancel: set by the button, closing
+  // the client aborts the in-flight model call, and _chat throws
+  // _ChatCancelled so _send posts "Cancelled" instead of a
+  // failure or a Psiphon detour.
+  bool _chatCancelled = false;
+  HttpClient? _activeChatClient;
   // v10.1.1: shortcuts under the Connected message only: the
   // index of that message and the link it connected. They render
   // only while that message is still the last one, so the next
@@ -953,6 +990,7 @@ class _AiChatState extends State<AiChatPage> {
     if (q.isEmpty) return;
     final s = widget.s;
     final fa = _replyFa(s, q);
+    _chatCancelled = false;
     setState(() => busy = true);
     final local = _localAnswer(s, q, fa);
     if (local != null) {
@@ -1004,6 +1042,15 @@ class _AiChatState extends State<AiChatPage> {
       _saveChats();
     } catch (e) {
       if (!mounted) return;
+      if (e is _ChatCancelled || _chatCancelled) {
+        setState(() {
+          msgs.add(_m(false, s.tLang('aicancelled', fa)));
+          busy = false;
+        });
+        history.removeLast();
+        _saveChats();
+        return;
+      }
       final detail =
           e is TimeoutException ? 'timed out, try again' : 'network error';
       setState(() {
@@ -1059,6 +1106,7 @@ class _AiChatState extends State<AiChatPage> {
   Future<void> _send(String text) async {
     final q = text.trim();
     if (q.isEmpty || busy) return;
+    _chatCancelled = false;
     final s = widget.s;
     // The reply language mirrors the language the user wrote in,
     // and the sent message keeps its attachment label as a
@@ -1173,6 +1221,17 @@ class _AiChatState extends State<AiChatPage> {
       _saveChats();
     } catch (e) {
       if (!mounted) return;
+      // v10.1.2: a thinking-row Cancel wins over every fallback:
+      // no failure message, no Psiphon detour, just "Cancelled".
+      if (e is _ChatCancelled || _chatCancelled) {
+        setState(() {
+          msgs.add(_m(false, s.tLang('aicancelled', fa)));
+          busy = false;
+        });
+        history.removeLast();
+        _saveChats();
+        return;
+      }
       // The hint depends on the real state: "connect first"
       // is wrong advice when the tunnel is already up and the
       // current server itself blocks the AI endpoint.
@@ -1199,7 +1258,8 @@ class _AiChatState extends State<AiChatPage> {
               });
               _saveChats();
               return;
-            } catch (_) {
+            } catch (e) {
+              if (_chatCancelled) rethrow;
               // Fall through to the plain network error below.
             }
           }
@@ -1246,6 +1306,7 @@ class _AiChatState extends State<AiChatPage> {
     // Psiphon can take a while on a filtered network; the chat
     // keeps its thinking row up meanwhile.
     for (var i = 0; i < 90; i++) {
+      if (_chatCancelled) return false;
       final p = s.psiphon.state.phase;
       if (p == PsiphonPhase.connected) return true;
       if (p == PsiphonPhase.failed || p == PsiphonPhase.needsConfig || p == PsiphonPhase.idle) return false;
@@ -1283,21 +1344,6 @@ class _AiChatState extends State<AiChatPage> {
   /// wins) is harmless. 60 s, down from 90: the test stage
   /// already filtered dead servers, so a config still unproven
   /// after a minute is not worth more waiting.
-  Future<EngineState?> _awaitVerdict() async {
-    return Future.any<EngineState?>([
-      widget.s.engine.states.firstWhere(
-        (e) => e.phase == Phase.connected || e.phase == Phase.failed,
-      ),
-      Future<EngineState?>.delayed(const Duration(seconds: 60)),
-      () async {
-        while (!_connectCancelled) {
-          await Future.delayed(const Duration(milliseconds: 300));
-        }
-        return null;
-      }(),
-    ]);
-  }
-
   /// v10.1.1: the three small shortcuts under a Connected
   /// message — check ping & traffic (a live in-chat answer),
   /// add to favorites, and the speed test page. Small and
@@ -1387,21 +1433,23 @@ class _AiChatState extends State<AiChatPage> {
           busy = false;
         });
       case _ActionKind.connect:
-        // "Connecting" is a loading row (like Thinking), NOT a
-        // chat message: it stays up while an attempt runs and
-        // vanishes when the verdict lands, leaving only the
-        // final Connected/failed message in the conversation.
-        // v10.1.1: the row has TWO phases now. First "testing
-        // servers": the country's configs are handshake-probed
-        // (like Smart/Auto does) and only the ones that answer
-        // are attempted — dead configs cost no connect time.
-        // Then "connecting" for the attempts themselves, up to
-        // 25 servers before the honest "can't connect" error.
-        // A Cancel button stops either phase at any time.
+        // v10.1.2: the connect runs the Automatic engine flow
+        // over the action's bundles (all providers, country
+        // filtered) — never Personal singles. The engine tests
+        // the pool itself (its probe still attempts configs the
+        // handshake probe could not reach), tries providers in
+        // order with TR GAMING priority, and only counts a
+        // connection when real traffic passes. The chat then
+        // verifies the exit country and, on a mismatch, drops
+        // that server and runs the flow again (up to 10 rounds).
+        // "Connecting" stays a loading row, not a message, and
+        // Cancel stops the engine run at any time.
         _connectCancelled = false;
         if (mounted) {
           setState(() {
-            actionProgress = a.remark;
+            actionProgress = a.country != null && a.country!.isNotEmpty
+                ? countryName(a.country!, fa)
+                : '';
             actionProgressTesting = false;
             actionProgressCancellable = true;
             actionProgressFa = fa;
@@ -1409,45 +1457,70 @@ class _AiChatState extends State<AiChatPage> {
           });
         }
         // Switching while connected, or "disconnect and connect
-        // to X": stop the current tunnel first. Starting a new
-        // connect on top of a live session is exactly what used
-        // to make the chat answer "you are already connected"
-        // instead of switching.
+        // to X": stop the current tunnel first.
         if (a.disconnectFirst ||
             s.engine.state.phase == Phase.connected ||
             s.psiphon.state.phase == PsiphonPhase.connected) {
           await s.disconnectAll();
         }
         if (!mounted) return;
-        // Stage 1 — test. 10 probes at a time, 4 s each: fast
-        // enough to cover the pool, slow enough not to flood a
-        // filtered network. A probe that answers (ms > 0) is a
-        // pass; UDP configs answer 9000 (unmeasurable) and are
-        // kept after real pings, not dropped.
-        final pool = a.candidates ??
-            [if (a.link != null) ChatCand(a.link!, '', false)];
-        final passed = <ChatCand>[];
-        if (mounted) {
+        // Live progress from the engine itself: its phase and
+        // message ("Fetching servers", "Testing servers on your
+        // network", "Connecting (3/42)") replace the chat's old
+        // probe counter, so the row never claims progress the
+        // engine is not making.
+        final engineSub = s.engine.states.listen((e) {
+          if (!mounted || _connectCancelled) return;
+          var msg = e.message;
+          if (e.phase == Phase.connecting && msg.startsWith('Connecting ')) {
+            msg = msg.substring('Connecting '.length);
+          }
           setState(() {
-            actionProgress = '0/${pool.length}';
-            actionProgressTesting = true;
+            actionProgress = msg;
+            actionProgressTesting =
+                e.phase == Phase.searching || e.phase == Phase.testing;
           });
-        }
-        var testedCount = 0;
-        var poolIdx = 0;
-        Future<void> worker() async {
-          while (poolIdx < pool.length && !_connectCancelled) {
-            final c = pool[poolIdx++];
-            final r = await probeLink(c.link, timeout: const Duration(seconds: 4));
-            testedCount++;
-            if (r.ms > 0) passed.add(ChatCand(c.link, c.provider, c.stale, r.ms));
-            if (mounted) {
-              setState(() => actionProgress = '$testedCount/${pool.length}');
+        });
+        final excluded = <String>{};
+        var triedMismatch = false;
+        var failDetail = '';
+        var connected = false;
+        for (var round = 0; round < 10 && !_connectCancelled; round++) {
+          final bundles = (a.bundles ?? const <ProviderBundle>[])
+              .map((b) => ProviderBundle(
+                  b.id, b.name, b.links.where((l) => !excluded.contains(l)).toList()))
+              .where((b) => b.links.isNotEmpty)
+              .toList();
+          if (bundles.isEmpty) break;
+          final ok = await s.connectAutoBundles(bundles);
+          if (!mounted) {
+            await engineSub.cancel();
+            return;
+          }
+          if (_connectCancelled) break;
+          if (!ok) {
+            failDetail = s.engine.state.message;
+            break;
+          }
+          if (a.country != null && a.country!.isNotEmpty) {
+            final okGeo = await _verifyExitCountry(a.country!);
+            if (!mounted) {
+              await engineSub.cancel();
+              return;
+            }
+            if (_connectCancelled) break;
+            if (!okGeo) {
+              triedMismatch = true;
+              final link = s.engine.currentLink;
+              if (link != null) excluded.add(link);
+              await s.disconnectAll();
+              continue;
             }
           }
+          connected = true;
+          break;
         }
-
-        await Future.wait(List.generate(10, (_) => worker()));
+        await engineSub.cancel();
         if (!mounted) return;
         if (_connectCancelled) {
           setState(() {
@@ -1460,102 +1533,47 @@ class _AiChatState extends State<AiChatPage> {
           _saveChats();
           return;
         }
-        // Stage 2 — attempt only what passed, up to 25, in
-        // provider order (Fast/AI first, or V2rayAG first for a
-        // fast-and-strong request), fastest ping first inside a
-        // provider, traffic-failed last.
-        final tries = orderChatCandidates(passed, a.fastStrong).take(25).toList();
-        if (tries.isEmpty) {
+        if (!connected) {
           setState(() {
             actionProgress = null;
             actionProgressTesting = false;
             actionProgressCancellable = false;
-            msgs.add(_m(false, s.tLang('ainopass', fa)));
+            msgs.add(_m(
+              false,
+              triedMismatch
+                  ? '${s.tLang('aicountrymismatch', fa)} ${countryName(a.country!, fa)}'
+                  : '${s.tLang('aiconnectfail', fa)}${failDetail.isEmpty ? '' : ' $failDetail'}',
+            ));
             busy = false;
           });
           _saveChats();
           return;
         }
-        // Try candidates in order until one REALLY connects to
-        // the requested country: a remark that says "US" is not
-        // proof — the exit IP's country is. A server whose geo
-        // lands elsewhere is dropped and the next candidate
-        // runs; the retry button re-runs this same loop with
-        // the failed servers pushed last.
-        var triedMismatch = false;
-        var failDetail = '';
-        for (var t = 0; t < tries.length; t++) {
-          if (_connectCancelled) break;
-          final link = tries[t].link;
-          final remark = _remarkOf(link);
-          if (mounted) {
-            setState(() {
-              actionProgress = remark;
-              actionProgressTesting = false;
-              actionProgressFa = fa;
-            });
-          }
-          s.connectLink(link);
-          final st = await _awaitVerdict();
-          if (!mounted) return;
-          if (_connectCancelled) break;
-          if (st == null || st.phase != Phase.connected) {
-            failDetail = st?.message ?? '';
-            await s.disconnectAll();
-            continue;
-          }
-          if (a.country != null && a.country!.isNotEmpty) {
-            final okGeo = await _verifyExitCountry(a.country!);
-            if (!mounted) return;
-            if (_connectCancelled) break;
-            if (!okGeo) {
-              triedMismatch = true;
-              await s.disconnectAll();
-              continue;
-            }
-          }
-          final cur = s.engine.state;
-          final msgIndex = msgs.length;
-          setState(() {
-            actionProgress = null;
-            actionProgressTesting = false;
-            actionProgressCancellable = false;
-            // Shortcuts live under this message only, while it
-            // is still the last message (see the bubble builder).
-            connectedShortcutIndex = msgIndex;
-            connectedShortcutLink = link;
-            msgs.add(_m(
-              false,
-              '${s.tLang('aiconnected', fa)} ${cur.configName ?? remark}${cur.delayMs == null ? '' : ' (${cur.delayMs} ms)'}',
-            ));
-          });
-          _saveChats();
-          // Success leaves the chat for the Connected page, so
-          // the user SEES the connection — after the message,
-          // with a beat to read it. Failure and disconnect stay
-          // in the chat, as asked.
-          await Future.delayed(const Duration(milliseconds: 900));
-          if (mounted) {
-            Navigator.of(context).popUntil((route) => route.isFirst);
-          }
-          return;
-        }
-        if (!mounted) return;
+        final cur = s.engine.state;
+        final msgIndex = msgs.length;
         setState(() {
           actionProgress = null;
           actionProgressTesting = false;
           actionProgressCancellable = false;
+          // Shortcuts live under this message only, while it
+          // is still the last message (see the bubble builder).
+          connectedShortcutIndex = msgIndex;
+          connectedShortcutLink = s.engine.currentLink;
           msgs.add(_m(
             false,
-            _connectCancelled
-                ? s.tLang('aicancelled', fa)
-                : triedMismatch
-                    ? '${s.tLang('aicountrymismatch', fa)} ${countryName(a.country!, fa)}'
-                    : '${s.tLang('aiconnectfail', fa)}${failDetail.isEmpty ? '' : ' $failDetail'}',
+            '${s.tLang('aiconnected', fa)} ${cur.configName ?? ''}${cur.delayMs == null ? '' : ' (${cur.delayMs} ms)'}',
           ));
-          busy = false;
         });
         _saveChats();
+        // Success leaves the chat for the Connected page, so
+        // the user SEES the connection — after the message,
+        // with a beat to read it. Failure and disconnect stay
+        // in the chat, as asked.
+        await Future.delayed(const Duration(milliseconds: 900));
+        if (mounted) {
+          Navigator.of(context).popUntil((route) => route.isFirst);
+        }
+        return;
       case _ActionKind.psiphon:
         // Psiphon to a country (or any region when no country
         // was named): mode + region, then the normal Psiphon
@@ -1680,11 +1698,19 @@ class _AiChatState extends State<AiChatPage> {
     if (chain.isEmpty) return s.tLang('aikeybad', fa);
     var sawNetwork = false;
     for (var i = 0; i < chain.length; i++) {
+      if (_chatCancelled) throw _ChatCancelled();
       final c = chain[i];
       if (i > 0 && mounted) {
         setState(() => modelSwitchNote = '${s.tLang('aiswitched', fa)} ${_modelLabel(c.model)}');
       }
-      final r = await _chatOnce(s, history, proxyPort: proxyPort, fa: fa, base: c.base, key: c.key, model: c.model);
+      late final ({String? answer, bool network}) r;
+      try {
+        r = await _chatOnce(s, history, proxyPort: proxyPort, fa: fa, base: c.base, key: c.key, model: c.model);
+      } catch (e) {
+        if (_chatCancelled) throw _ChatCancelled();
+        rethrow;
+      }
+      if (_chatCancelled) throw _ChatCancelled();
       if (r.answer != null) {
         if (mounted) setState(() => modelSwitchNote = null);
         return r.answer!;
@@ -1741,6 +1767,7 @@ class _AiChatState extends State<AiChatPage> {
   Future<({String? answer, bool network})> _chatOnce(Store s, List<Map<String, dynamic>> history,
       {int? proxyPort, required bool fa, required String base, required String key, required String model}) async {
     final c = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+    _activeChatClient = c;
     // Psiphon fallback: route through its HTTP proxy instead of the
     // bare network. (SOCKS would need protocol support HttpClient
     // does not offer; Psiphon's HTTP port is the right channel.)
@@ -1826,6 +1853,7 @@ class _AiChatState extends State<AiChatPage> {
       }
       return (answer: null, network: false);
     } finally {
+      if (_activeChatClient == c) _activeChatClient = null;
       c.close(force: true);
     }
   }
@@ -2575,7 +2603,16 @@ class _AiChatState extends State<AiChatPage> {
                         // Only a chat connect is cancellable.
                         if (actionProgressCancellable)
                           TextButton(
-                            onPressed: () => setState(() => _connectCancelled = true),
+                            onPressed: () {
+                              _connectCancelled = true;
+                              // v10.1.2: the Automatic engine run
+                              // only stops promptly when it is
+                              // actually stopped, not just
+                              // flagged — the loop then posts
+                              // "Cancelled" instead of hanging
+                              // on the verdict.
+                              s.disconnectAll();
+                            },
                             child: Text(s.t('cancel')),
                           ),
                       ]),
@@ -2594,6 +2631,17 @@ class _AiChatState extends State<AiChatPage> {
                           modelSwitchNote == null ? s.t('aithinking') : '${s.t('aithinking')} ($modelSwitchNote)',
                           style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(.6), fontSize: 13),
                         ),
+                      ),
+                      // v10.1.2: Cancel on the thinking row too:
+                      // aborts the in-flight model call, so the
+                      // user can send the next request instead
+                      // of waiting out a slow model.
+                      TextButton(
+                        onPressed: () {
+                          _chatCancelled = true;
+                          _activeChatClient?.close(force: true);
+                        },
+                        child: Text(s.t('cancel')),
                       ),
                     ]),
                   );
