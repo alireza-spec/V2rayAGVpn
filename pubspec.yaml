@@ -36,7 +36,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_vless: ^1.1.6
   file_picker: ^13.3.0
-    flutter_markdown: ^0.7.7
+  flutter_markdown: ^0.7.7
 
 dev_dependencies:
   flutter_test:
