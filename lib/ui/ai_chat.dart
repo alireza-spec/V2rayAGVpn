@@ -26,6 +26,8 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import '../app/store.dart';
 import '../engine/pool_engine.dart';
 import '../engine/psiphon_engine.dart';
+import '../engine/tcp_probe.dart';
+import 'speed_page.dart';
 
 /// Strips a model's thinking trace from its reply. GLM models
 /// sometimes emit their <think>…</think> reasoning inline, and
@@ -285,7 +287,13 @@ class _Action {
   // Ordered connect candidates (best first) for the
   // country-verified loop: a failed or wrong-country server
   // falls through to the next one instead of giving up.
-  final List<String>? candidates;
+  // v10.1.1: the TEST pool (up to 80), not the attempt list —
+  // _runAction probes this pool first and attempts only what
+  // passed, up to 25.
+  final List<ChatCand>? candidates;
+  // v10.1.1: "fast and strong" request → V2rayAG-first order;
+  // otherwise the country order (Fast/AI first, V2rayAG last).
+  final bool fastStrong;
   const _Action(this.kind,
       {this.link,
       this.remark,
@@ -293,7 +301,8 @@ class _Action {
       this.mode,
       this.country,
       this.disconnectFirst = false,
-      this.candidates});
+      this.candidates,
+      this.fastStrong = false});
 }
 
 /// Direct answer from measured state, no AI call: "what
@@ -466,39 +475,26 @@ _Action? _actionFor(Store s, String q) {
     }
   }
   if (!wantsConnect && !wantsFind) return null;
-  // Candidates: Fast and AI providers first (they connect most
-  // reliably), measured pings before untested links, and servers
-  // already known to carry no traffic last — so a retry
-  // naturally tries someone else instead of the same dead one.
-  const preferredProviders = {'fast', 'ai'};
-  final tested = <_Cand>[];
-  final untested = <_Cand>[];
+  // Candidates: every config of the requested country (by name,
+  // flag or real location), ordered so the test phase tries the
+  // most promising providers first. The test pool is capped at
+  // 80: the app tests first and only attempts what passed, so a
+  // pool of thousands would cost minutes of probing for nothing.
+  // Servers already known to carry no traffic sort last, so a
+  // retry naturally tries someone else instead of the same dead
+  // one.
+  final fastStrong = isFastStrong(q, low);
+  final all = <ChatCand>[];
   for (final b in s.buildBundles()) {
     for (final l in b.links) {
       if (code != null && !_remarkMatchesCountry(_remarkOf(l), code)) {
         continue;
       }
-      final stale = s.trafficFailed.contains(l);
-      final ms = s.pings[l];
-      if (ms != null && ms > 0) {
-        tested.add(_Cand(l, b.id, stale, ms));
-      } else {
-        untested.add(_Cand(l, b.id, stale));
-      }
+      all.add(ChatCand(l, b.id, s.trafficFailed.contains(l), s.pings[l]));
     }
   }
-  int candCmp(_Cand a, _Cand b) {
-    final pa = preferredProviders.contains(a.provider) ? 0 : 1;
-    final pb = preferredProviders.contains(b.provider) ? 0 : 1;
-    if (pa != pb) return pa - pb;
-    if (a.stale != b.stale) return a.stale ? 1 : -1;
-    return (a.ms ?? 1 << 30).compareTo(b.ms ?? 1 << 30);
-  }
-
-  tested.sort(candCmp);
-  untested.sort(candCmp);
+  final ordered = orderChatCandidates(all, fastStrong);
   if (wantsConnect) {
-    final ordered = [...tested, ...untested];
     if (ordered.isEmpty) {
       return _Action(_ActionKind.find, message: s.tLang('ainofound', fa));
     }
@@ -508,16 +504,17 @@ _Action? _actionFor(Store s, String q) {
         remark: _remarkOf(first.link),
         country: code,
         disconnectFirst: hasDisconnect,
-        candidates: ordered.take(4).map((c) => c.link).toList());
+        fastStrong: fastStrong,
+        candidates: ordered.take(80).toList());
   }
-  if (tested.isEmpty && untested.isEmpty) {
+  if (ordered.isEmpty) {
     return _Action(_ActionKind.find, message: s.tLang('ainofound', fa));
   }
   final lines = <String>[];
-  for (final t in tested.take(3)) {
+  for (final t in ordered.where((c) => c.ms != null).take(3)) {
     lines.add('• ${_remarkOf(t.link)} — ${t.ms} ms');
   }
-  for (final l in untested.take(3 - lines.length)) {
+  for (final l in ordered.where((c) => c.ms == null).take(3 - lines.length)) {
     lines.add('• ${_remarkOf(l.link)}');
   }
   return _Action(_ActionKind.find, message: '${s.tLang('aifound', fa)}\n${lines.join('\n')}');
@@ -525,25 +522,69 @@ _Action? _actionFor(Store s, String q) {
 
 /// One connect candidate: its link, its provider, whether it
 /// already proved it carries no traffic, and its measured ping.
-class _Cand {
+class ChatCand {
   final String link, provider;
   final bool stale;
   final int? ms;
-  const _Cand(this.link, this.provider, this.stale, [this.ms]);
+  const ChatCand(this.link, this.provider, this.stale, [this.ms]);
+}
+
+/// v10.1.1: provider order for a chat country connect (Fast and
+/// AI first — they connect most reliably — V2rayAG Exclusive
+/// last), and for a "fast and strong" request (V2rayAG Exclusive
+/// first: its TR GAMING servers are the speed pick).
+const _countryProviderOrder = ['fast', 'ai', 'update', 'antifilter', 'hiddify', 'v2rayag'];
+const _fastStrongProviderOrder = ['v2rayag', 'fast', 'update', 'antifilter', 'hiddify', 'ai'];
+
+int providerRank(String id, bool fastStrong) {
+  final order = fastStrong ? _fastStrongProviderOrder : _countryProviderOrder;
+  final i = order.indexOf(id);
+  return i < 0 ? order.length : i;
+}
+
+/// "Fast and strong" request? Words, not provider names: a user
+/// asking for speed gets the V2rayAG-first order, everyone else
+/// gets the country order.
+bool isFastStrong(String q, String low) =>
+    low.contains('fast') ||
+    low.contains('strong') ||
+    low.contains('quick') ||
+    q.contains('سریع') ||
+    q.contains('قوی') ||
+    q.contains('پرسرعت');
+
+/// Order chat candidates: previously measured before untested,
+/// provider rank, already-traffic-failed last, fastest ping
+/// first inside a provider. A UDP config's 9000 ms probe sorts
+/// last inside its provider — it answered nothing measurable,
+/// so it is tried after real pings, not dropped.
+List<ChatCand> orderChatCandidates(List<ChatCand> cands, bool fastStrong) {
+  final sorted = [...cands];
+  sorted.sort((a, b) {
+    final ta = a.ms != null ? 0 : 1, tb = b.ms != null ? 0 : 1;
+    if (ta != tb) return ta - tb;
+    final ra = providerRank(a.provider, fastStrong), rb = providerRank(b.provider, fastStrong);
+    if (ra != rb) return ra - rb;
+    if (a.stale != b.stale) return a.stale ? 1 : -1;
+    return (a.ms ?? 1 << 30).compareTo(b.ms ?? 1 << 30);
+  });
+  return sorted;
 }
 
 /// Ready questions: the ones users actually ask first. Tapping one
 /// sends it as the user's message.
-/// Icons for the ready questions, in the same order: US
+/// Icons for the ready questions, in the same order: USA
 /// connect, drop, UK connect, best server, share, logs, CDN,
-/// Psiphon, tools.
+/// Psiphon, tools. The two country connects show their flag
+/// instead of an icon (v10.1.1: USA, not US, to avoid confusion).
 const _qIcons = [Icons.public, Icons.link_off, Icons.wifi_off, Icons.flag, Icons.star, Icons.share, Icons.bug_report, Icons.dns, Icons.shield, Icons.build];
+const qFlags = ['🇺🇸', null, null, '🇬🇧', null, null, null, null, null, null];
 
-const _readyQuestions = [
+const readyQuestions = [
   // First: the one users actually ask for most — and it IS an
   // action ("connect me"), not just a question, so tapping it
   // really connects (see _actionFor).
-  ['Connect me to a US server', 'منو به یه سرور آمریکا وصل کن'],
+  ['Connect me to a USA server', 'منو به یه سرور آمریکا وصل کن'],
   ['Why won\'t it connect?', 'چرا وصل نمی‌شه؟'],
   ['Why does my connection drop?', 'چرا اتصالم قطع می‌شه؟'],
   // UK connect sits in the middle, not first, as asked — same
@@ -650,6 +691,10 @@ String _gonkaLabel(String m) => switch (m) {
       _ => m,
     };
 
+/// Display name for a model id in the fallback note: Gonka ids
+/// get their short label, everything else shows its id.
+String _modelLabel(String m) => _gonkaModels.contains(m) ? _gonkaLabel(m) : m;
+
 class _AiChatState extends State<AiChatPage> {
   final msgs = <_Msg>[];
   final history = <Map<String, dynamic>>[];
@@ -669,6 +714,23 @@ class _AiChatState extends State<AiChatPage> {
   // action starts, cleared only when the verdict lands.
   String? actionProgress;
   bool actionProgressFa = false;
+  // v10.1.1: the progress row has two phases — "testing servers"
+  // first, then "connecting" — and the user can cancel either one.
+  // Cancel is only offered for a chat connect (never for the
+  // Psiphon branch, which has its own settled-result loop).
+  bool actionProgressTesting = false;
+  bool actionProgressCancellable = false;
+  bool _connectCancelled = false;
+  // v10.1.1: shortcuts under the Connected message only: the
+  // index of that message and the link it connected. They render
+  // only while that message is still the last one, so the next
+  // message (from either side) hides them automatically. They are
+  // transient — never saved with the chat.
+  int? connectedShortcutIndex;
+  String? connectedShortcutLink;
+  // v10.1.1: model-fallback note, shown in the thinking row while
+  // the retry runs ("Switched to …").
+  String? modelSwitchNote;
   // History sidebar: saved conversations + which one is open.
   final savedChats = <_Chat>[];
   String currentChatId = '';
@@ -821,6 +883,11 @@ class _AiChatState extends State<AiChatPage> {
     pendingImageName = null;
     pendingImageMime = null;
     actionProgress = null;
+    // Shortcuts belong to one live session only: switching or
+    // starting a chat must never show them under another chat's
+    // message with a coincidentally equal index.
+    connectedShortcutIndex = null;
+    connectedShortcutLink = null;
   }
 
   void _switchChat(_Chat c) {
@@ -948,7 +1015,31 @@ class _AiChatState extends State<AiChatPage> {
     }
   }
 
-  void _deleteChat(String id) {
+  Future<void> _deleteChat(String id) async {
+    // v10.1.1: delete takes a confirmation, so a stray tap
+    // never wipes a conversation.
+    if (_scaffoldKey.currentState?.isDrawerOpen == true) {
+      Navigator.pop(context);
+    }
+    final s = widget.s;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(s.t('aidelete')),
+        content: Text(s.t('aideleteconfirm')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(s.t('cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(s.t('delete')),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
     final wasCurrent = id == currentChatId;
     savedChats.removeWhere((c) => c.id == id);
     setState(() {
@@ -1185,6 +1276,92 @@ class _AiChatState extends State<AiChatPage> {
   /// server list happen at once; connect starts through the
   /// normal Personal path (full-device VPN, traffic-proof
   /// verify) and the outcome is posted back into the chat.
+  /// Verdict wait for one chat attempt: the engine's connected /
+  /// failed verdict, a 60 s cap, or the user's Cancel — whichever
+  /// comes first. The engine stream is broadcast, so the
+  /// abandoned firstWhere subscription (when Cancel or the cap
+  /// wins) is harmless. 60 s, down from 90: the test stage
+  /// already filtered dead servers, so a config still unproven
+  /// after a minute is not worth more waiting.
+  Future<EngineState?> _awaitVerdict() async {
+    return Future.any<EngineState?>([
+      widget.s.engine.states.firstWhere(
+        (e) => e.phase == Phase.connected || e.phase == Phase.failed,
+      ),
+      Future<EngineState?>.delayed(const Duration(seconds: 60)),
+      () async {
+        while (!_connectCancelled) {
+          await Future.delayed(const Duration(milliseconds: 300));
+        }
+        return null;
+      }(),
+    ]);
+  }
+
+  /// v10.1.1: the three small shortcuts under a Connected
+  /// message — check ping & traffic (a live in-chat answer),
+  /// add to favorites, and the speed test page. Small and
+  /// subtle, side by side, never under errors or other messages.
+  Widget _connectedShortcuts(Store s, String link) {
+    final fav = s.isFavorite(link);
+    final btnStyle = TextButton.styleFrom(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      minimumSize: Size.zero,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    const labelStyle = TextStyle(fontSize: 11);
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextButton.icon(
+            icon: const Icon(Icons.speed, size: 14),
+            label: Text(s.t('aipingtraffic'), style: labelStyle),
+            style: btnStyle,
+            onPressed: () {
+              final cur = s.engine.state;
+              final t = cur.traffic;
+              final parts = <String>[];
+              final loc = cur.location;
+              if (loc != null && loc.isNotEmpty) {
+                parts.add(loc);
+              }
+              if (cur.delayMs != null) parts.add('${cur.delayMs} ms');
+              parts.add('↓ ${_fmtBytes(t.downTotal)} ↑ ${_fmtBytes(t.upTotal)}');
+              setState(() {
+                msgs.add(_m(false,
+                    parts.isEmpty ? s.t('aistatsnone') : parts.join(' · ')));
+              });
+              _saveChats();
+            },
+          ),
+          TextButton.icon(
+            icon: Icon(fav ? Icons.star : Icons.star_border, size: 14),
+            label: Text(s.t('favorites'), style: labelStyle),
+            style: btnStyle,
+            onPressed: () {
+              s.toggleFavorite(link);
+              setState(() {
+                msgs.add(_m(false, s.t(fav ? 'aifavremoved' : 'aifavadded')));
+              });
+              _saveChats();
+            },
+          ),
+          TextButton.icon(
+            icon: const Icon(Icons.timer, size: 14),
+            label: Text(s.t('speedtest'), style: labelStyle),
+            style: btnStyle,
+            onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => SpeedTestPage(s, autoStart: true))),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _runAction(_Action a, bool fa) async {
     final s = widget.s;
     switch (a.kind) {
@@ -1214,9 +1391,19 @@ class _AiChatState extends State<AiChatPage> {
         // chat message: it stays up while an attempt runs and
         // vanishes when the verdict lands, leaving only the
         // final Connected/failed message in the conversation.
+        // v10.1.1: the row has TWO phases now. First "testing
+        // servers": the country's configs are handshake-probed
+        // (like Smart/Auto does) and only the ones that answer
+        // are attempted — dead configs cost no connect time.
+        // Then "connecting" for the attempts themselves, up to
+        // 25 servers before the honest "can't connect" error.
+        // A Cancel button stops either phase at any time.
+        _connectCancelled = false;
         if (mounted) {
           setState(() {
             actionProgress = a.remark;
+            actionProgressTesting = false;
+            actionProgressCancellable = true;
             actionProgressFa = fa;
             busy = false;
           });
@@ -1231,36 +1418,87 @@ class _AiChatState extends State<AiChatPage> {
             s.psiphon.state.phase == PsiphonPhase.connected) {
           await s.disconnectAll();
         }
+        if (!mounted) return;
+        // Stage 1 — test. 10 probes at a time, 4 s each: fast
+        // enough to cover the pool, slow enough not to flood a
+        // filtered network. A probe that answers (ms > 0) is a
+        // pass; UDP configs answer 9000 (unmeasurable) and are
+        // kept after real pings, not dropped.
+        final pool = a.candidates ??
+            [if (a.link != null) ChatCand(a.link!, '', false)];
+        final passed = <ChatCand>[];
+        if (mounted) {
+          setState(() {
+            actionProgress = '0/${pool.length}';
+            actionProgressTesting = true;
+          });
+        }
+        var testedCount = 0;
+        var poolIdx = 0;
+        Future<void> worker() async {
+          while (poolIdx < pool.length && !_connectCancelled) {
+            final c = pool[poolIdx++];
+            final r = await probeLink(c.link, timeout: const Duration(seconds: 4));
+            testedCount++;
+            if (r.ms > 0) passed.add(ChatCand(c.link, c.provider, c.stale, r.ms));
+            if (mounted) {
+              setState(() => actionProgress = '$testedCount/${pool.length}');
+            }
+          }
+        }
+
+        await Future.wait(List.generate(10, (_) => worker()));
+        if (!mounted) return;
+        if (_connectCancelled) {
+          setState(() {
+            actionProgress = null;
+            actionProgressTesting = false;
+            actionProgressCancellable = false;
+            msgs.add(_m(false, s.tLang('aicancelled', fa)));
+            busy = false;
+          });
+          _saveChats();
+          return;
+        }
+        // Stage 2 — attempt only what passed, up to 25, in
+        // provider order (Fast/AI first, or V2rayAG first for a
+        // fast-and-strong request), fastest ping first inside a
+        // provider, traffic-failed last.
+        final tries = orderChatCandidates(passed, a.fastStrong).take(25).toList();
+        if (tries.isEmpty) {
+          setState(() {
+            actionProgress = null;
+            actionProgressTesting = false;
+            actionProgressCancellable = false;
+            msgs.add(_m(false, s.tLang('ainopass', fa)));
+            busy = false;
+          });
+          _saveChats();
+          return;
+        }
         // Try candidates in order until one REALLY connects to
         // the requested country: a remark that says "US" is not
         // proof — the exit IP's country is. A server whose geo
         // lands elsewhere is dropped and the next candidate
         // runs; the retry button re-runs this same loop with
         // the failed servers pushed last.
-        final tries = a.candidates ?? [a.link!];
         var triedMismatch = false;
         var failDetail = '';
         for (var t = 0; t < tries.length; t++) {
-          final link = tries[t];
+          if (_connectCancelled) break;
+          final link = tries[t].link;
           final remark = _remarkOf(link);
           if (mounted) {
             setState(() {
               actionProgress = remark;
+              actionProgressTesting = false;
               actionProgressFa = fa;
             });
           }
           s.connectLink(link);
-          EngineState? st;
-          try {
-            st = await s.engine.states
-                .firstWhere(
-                  (e) => e.phase == Phase.connected || e.phase == Phase.failed,
-                )
-                .timeout(const Duration(seconds: 90));
-          } on TimeoutException {
-            st = null;
-          }
+          final st = await _awaitVerdict();
           if (!mounted) return;
+          if (_connectCancelled) break;
           if (st == null || st.phase != Phase.connected) {
             failDetail = st?.message ?? '';
             await s.disconnectAll();
@@ -1269,6 +1507,7 @@ class _AiChatState extends State<AiChatPage> {
           if (a.country != null && a.country!.isNotEmpty) {
             final okGeo = await _verifyExitCountry(a.country!);
             if (!mounted) return;
+            if (_connectCancelled) break;
             if (!okGeo) {
               triedMismatch = true;
               await s.disconnectAll();
@@ -1276,13 +1515,21 @@ class _AiChatState extends State<AiChatPage> {
             }
           }
           final cur = s.engine.state;
+          final msgIndex = msgs.length;
           setState(() {
             actionProgress = null;
+            actionProgressTesting = false;
+            actionProgressCancellable = false;
+            // Shortcuts live under this message only, while it
+            // is still the last message (see the bubble builder).
+            connectedShortcutIndex = msgIndex;
+            connectedShortcutLink = link;
             msgs.add(_m(
               false,
               '${s.tLang('aiconnected', fa)} ${cur.configName ?? remark}${cur.delayMs == null ? '' : ' (${cur.delayMs} ms)'}',
             ));
           });
+          _saveChats();
           // Success leaves the chat for the Connected page, so
           // the user SEES the connection — after the message,
           // with a beat to read it. Failure and disconnect stay
@@ -1296,13 +1543,19 @@ class _AiChatState extends State<AiChatPage> {
         if (!mounted) return;
         setState(() {
           actionProgress = null;
+          actionProgressTesting = false;
+          actionProgressCancellable = false;
           msgs.add(_m(
             false,
-            triedMismatch
-                ? '${s.tLang('aicountrymismatch', fa)} ${countryName(a.country!, fa)}'
-                : '${s.tLang('aiconnectfail', fa)}${failDetail.isEmpty ? '' : ' $failDetail'}',
+            _connectCancelled
+                ? s.tLang('aicancelled', fa)
+                : triedMismatch
+                    ? '${s.tLang('aicountrymismatch', fa)} ${countryName(a.country!, fa)}'
+                    : '${s.tLang('aiconnectfail', fa)}${failDetail.isEmpty ? '' : ' $failDetail'}',
           ));
+          busy = false;
         });
+        _saveChats();
       case _ActionKind.psiphon:
         // Psiphon to a country (or any region when no country
         // was named): mode + region, then the normal Psiphon
@@ -1411,31 +1664,95 @@ class _AiChatState extends State<AiChatPage> {
     return geoMatches(loc, code);
   }
 
+  /// v10.1.1: model auto-fallback. If the current model does not
+  /// answer within a few seconds (timeout, network failure, empty
+  /// reply, 5xx), the chat automatically tries the next model and
+  /// says so in the thinking row — Z.ai models first, then Gonka,
+  /// then user-added providers. The user's saved provider/model
+  /// never changes: the fallback is for this answer only. Key
+  /// errors (401/403/402) and quota (429) are final answers, not
+  /// fallback triggers — another model on the same key would fail
+  /// the same way. When every model fails on the network, the
+  /// TimeoutException propagates so _send's Psiphon fallback (for
+  /// a filtered network) still runs.
   Future<String> _chat(Store s, List<Map<String, dynamic>> history, {int? proxyPort, required bool fa}) async {
+    final chain = _fallbackChain(s);
+    if (chain.isEmpty) return s.tLang('aikeybad', fa);
+    var sawNetwork = false;
+    for (var i = 0; i < chain.length; i++) {
+      final c = chain[i];
+      if (i > 0 && mounted) {
+        setState(() => modelSwitchNote = '${s.tLang('aiswitched', fa)} ${_modelLabel(c.model)}');
+      }
+      final r = await _chatOnce(s, history, proxyPort: proxyPort, fa: fa, base: c.base, key: c.key, model: c.model);
+      if (r.answer != null) {
+        if (mounted) setState(() => modelSwitchNote = null);
+        return r.answer!;
+      }
+      if (r.network) sawNetwork = true;
+    }
+    if (mounted) setState(() => modelSwitchNote = null);
+    if (sawNetwork) throw TimeoutException('no model answered');
+    return s.tLang('aifailed', fa);
+  }
+
+  /// One model attempt: its provider base + key + model id.
+  /// Z.ai's free models first, then Gonka's routed models (only
+  /// with a Gonka key), then every user-added provider's models.
+  /// The current pick is first; duplicates (same base + model)
+  /// are skipped.
+  List<({String base, String key, String model})> _fallbackChain(Store s) {
+    final chain = <({String base, String key, String model})>[];
+    void add(String base, String key, String model) {
+      if (key.isEmpty) return;
+      if (chain.any((c) => c.base == base && c.model == model)) return;
+      chain.add((base: base, key: key, model: model));
+    }
+
+    final gonka = s.aiProvider == 'gonka';
+    final custom = s.aiProvider == 'custom';
+    final base = (gonka ? s.gonkaBase : custom ? s.customBase : s.aiBase).replaceAll(RegExp(r'/+$'), '');
+    final key = gonka ? s.gonkaKey : custom ? s.customKey : s.aiKey;
+    add(base, key, s.aiChatModel);
+    for (final m in _freeModels) {
+      add(s.aiBase.replaceAll(RegExp(r'/+$'), ''), s.aiKey, m);
+    }
+    for (final m in _gonkaModels) {
+      add(s.gonkaBase, s.gonkaKey, m);
+    }
+    for (final p in s.customProviders) {
+      final b = '${p['base'] ?? ''}'.replaceAll(RegExp(r'/+$'), '');
+      final k = '${p['key'] ?? ''}';
+      final models = p['models'];
+      if (models is List) {
+        for (final m in models) {
+          add(b, k, '$m');
+        }
+      }
+    }
+    return chain;
+  }
+
+  /// One attempt against one model. Returns (answer, network):
+  /// answer != null is final (a reply, or a key/quota/filter
+  /// explanation); answer == null means "try the next model",
+  /// with network telling whether the failure was on the network
+  /// (timeout, socket, 5xx) or the model just gave nothing.
+  Future<({String? answer, bool network})> _chatOnce(Store s, List<Map<String, dynamic>> history,
+      {int? proxyPort, required bool fa, required String base, required String key, required String model}) async {
     final c = HttpClient()..connectionTimeout = const Duration(seconds: 15);
     // Psiphon fallback: route through its HTTP proxy instead of the
     // bare network. (SOCKS would need protocol support HttpClient
     // does not offer; Psiphon's HTTP port is the right channel.)
     if (proxyPort != null) c.findProxy = (_) => 'PROXY 127.0.0.1:$proxyPort';
     try {
-      // Provider-aware routing: Gonka picks use Gonka's base/key
-      // and their own model; custom picks use their own base/key/
-      // model; Z.ai keeps base/key/remote-model.
-      final gonka = s.aiProvider == 'gonka';
-      final custom = s.aiProvider == 'custom';
-      final base = (gonka
-              ? s.gonkaBase
-              : custom
-                  ? s.customBase
-                  : s.aiBase)
-          .replaceAll(RegExp(r'/+$'), '');
-      final key = gonka ? s.gonkaKey : custom ? s.customKey : s.aiKey;
       for (var attempt = 0; attempt < 2; attempt++) {
+        try {
         final req = await c.postUrl(Uri.parse('$base/chat/completions'));
         req.headers.set('Content-Type', 'application/json');
         req.headers.set('Authorization', 'Bearer $key');
         req.add(utf8.encode(jsonEncode({
-          'model': s.aiChatModel,
+          'model': model,
           'messages': [
             {'role': 'system', 'content': _systemPrompt(s, fa)},
             ...history,
@@ -1443,8 +1760,8 @@ class _AiChatState extends State<AiChatPage> {
           'temperature': 0.3,
           'max_tokens': 1200,
         })));
-        final res = await req.close().timeout(const Duration(seconds: 60));
-        final body = await res.transform(utf8.decoder).join();
+        final res = await req.close().timeout(const Duration(seconds: 15));
+        final body = await res.transform(utf8.decoder).join().timeout(const Duration(seconds: 15));
         if (res.statusCode == 429 && attempt == 0) {
           // Free tiers allow ~1 request/sec: a rapid second tap
           // trips 429 even though the key is fine. One retry
@@ -1466,7 +1783,7 @@ class _AiChatState extends State<AiChatPage> {
           final lowDetail = detail.toLowerCase();
           if (res.statusCode == 400 &&
               (lowDetail.contains('sensitive') || lowDetail.contains('unsafe'))) {
-            return s.tLang('aifilter', fa);
+            return (answer: s.tLang('aifilter', fa), network: false);
           }
           // Vision is per-model, not per-app: if the provider
           // rejects an image part, say so honestly instead of
@@ -1475,19 +1792,22 @@ class _AiChatState extends State<AiChatPage> {
               (lowDetail.contains('image') ||
                   lowDetail.contains('vision') ||
                   lowDetail.contains('multimodal'))) {
-            return s.tLang('ainovision', fa);
+            return (answer: s.tLang('ainovision', fa), network: false);
           }
+          // 5xx is a "not responding" failure: another model
+          // may answer. Everything else below is final.
+          if (res.statusCode >= 500) return (answer: null, network: true);
+          final isGonka = base == s.gonkaBase;
           final why = switch (res.statusCode) {
             401 => s.tLang('aikeybad', fa),
-            402 => gonka
+            402 => isGonka
                 ? s.tLang('gonkacredit', fa)
                 : '${s.tLang('aifailed', fa)} (HTTP 402${detail.isEmpty ? '' : ': $detail'})',
             403 => s.tLang('aiforbidden', fa),
             429 => s.tLang('aiquota', fa),
-            >= 500 => '${s.tLang('aiserver', fa)} (HTTP ${res.statusCode})',
             _ => '${s.tLang('aifailed', fa)} (HTTP ${res.statusCode}${detail.isEmpty ? '' : ': $detail'})',
           };
-          return why;
+          return (answer: why, network: false);
         }
         final j = jsonDecode(body) as Map<String, dynamic>;
         final choices = j['choices'] as List?;
@@ -1496,10 +1816,15 @@ class _AiChatState extends State<AiChatPage> {
           final msg = choices[0]['message'];
           if (msg is Map) text = msg['content'] as String?;
         }
-        if (text == null || text.trim().isEmpty) return s.tLang('aifailed', fa);
-        return _cleanReply(text.trim());
+        if (text == null || text.trim().isEmpty) return (answer: null, network: false);
+        return (answer: _cleanReply(text.trim()), network: false);
+        } on TimeoutException {
+          return (answer: null, network: true);
+        } on SocketException {
+          return (answer: null, network: true);
+        }
       }
-      return s.tLang('aifailed', fa);
+      return (answer: null, network: false);
     } finally {
       c.close(force: true);
     }
@@ -1975,6 +2300,13 @@ class _AiChatState extends State<AiChatPage> {
         child: SafeArea(
           child: Column(
             children: [
+              // v10.1.1: back arrow at the top of the drawer,
+              // back to the chat.
+              ListTile(
+                leading: const Icon(Icons.arrow_back),
+                title: Text(s.t('aichats')),
+                onTap: () => Navigator.pop(context),
+              ),
               ListTile(
                 leading: const Icon(Icons.add),
                 title: Text(s.t('ainewchat')),
@@ -2017,32 +2349,52 @@ class _AiChatState extends State<AiChatPage> {
                                 Navigator.pop(context);
                                 _switchChat(c);
                               },
-                              trailing: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  IconButton(
-                                    icon: Icon(
-                                      Icons.push_pin,
-                                      size: 18,
-                                      color: c.pinned
-                                          ? Theme.of(context).colorScheme.primary
-                                          : Colors.grey,
-                                    ),
-                                    tooltip: c.pinned ? s.t('aiunpin') : s.t('aipin'),
-                                    onPressed: () {
-                                      c.pinned = !c.pinned;
-                                      _saveChats();
-                                      setState(() {});
-                                    },
+                              // v10.1.1: one ⋮ menu per chat
+                              // (rename / pin / delete) instead
+                              // of three icons crowding the row.
+                              // Delete asks for confirmation.
+                              trailing: PopupMenuButton<String>(
+                                icon: const Icon(Icons.more_vert, size: 18),
+                                onSelected: (v) async {
+                                  if (v == 'pin') {
+                                    c.pinned = !c.pinned;
+                                    _saveChats();
+                                    setState(() {});
+                                  } else if (v == 'rename') {
+                                    _renameChat(c);
+                                  } else if (v == 'delete') {
+                                    await _deleteChat(c.id);
+                                  }
+                                },
+                                itemBuilder: (_) => [
+                                  PopupMenuItem(
+                                    value: 'pin',
+                                    child: Row(children: [
+                                      Icon(
+                                        c.pinned
+                                            ? Icons.push_pin
+                                            : Icons.push_pin_outlined,
+                                        size: 18,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(s.t(c.pinned ? 'aiunpin' : 'aipin')),
+                                    ]),
                                   ),
-                                  IconButton(
-                                    icon: const Icon(Icons.edit, size: 18),
-                                    tooltip: s.t('airename'),
-                                    onPressed: () => _renameChat(c),
+                                  PopupMenuItem(
+                                    value: 'rename',
+                                    child: Row(children: [
+                                      const Icon(Icons.edit, size: 18),
+                                      const SizedBox(width: 8),
+                                      Text(s.t('airename')),
+                                    ]),
                                   ),
-                                  IconButton(
-                                    icon: const Icon(Icons.delete, size: 18),
-                                    onPressed: () => _deleteChat(c.id),
+                                  PopupMenuItem(
+                                    value: 'delete',
+                                    child: Row(children: [
+                                      const Icon(Icons.delete, size: 18),
+                                      const SizedBox(width: 8),
+                                      Text(s.t('aidelete')),
+                                    ]),
                                   ),
                                 ],
                               ),
@@ -2059,6 +2411,12 @@ class _AiChatState extends State<AiChatPage> {
         // Design 1 header: title plus a live status line (model
         // menu stays in the actions). The dot is real state: green
         // only when the current provider actually has a key.
+        // v10.1.1: explicit back arrow in the top corner, next
+        // to the title, back to the previous page.
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.maybePop(context),
+        ),
         title: ListenableBuilder(
           listenable: s,
           builder: (_, __) {
@@ -2205,10 +2563,21 @@ class _AiChatState extends State<AiChatPage> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            '${s.tLang('aiconnecting', actionProgressFa)} $actionProgress…',
+                            actionProgressTesting
+                                ? '${s.tLang('aitesting', actionProgressFa)} $actionProgress…'
+                                : '${s.tLang('aiconnecting', actionProgressFa)} $actionProgress…',
                             style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(.6), fontSize: 13),
                           ),
                         ),
+                        // Cancel: stops the test or the attempt
+                        // at any time, so the user can send the
+                        // next request instead of waiting it out.
+                        // Only a chat connect is cancellable.
+                        if (actionProgressCancellable)
+                          TextButton(
+                            onPressed: () => setState(() => _connectCancelled = true),
+                            child: Text(s.t('cancel')),
+                          ),
                       ]),
                     );
                   }
@@ -2217,7 +2586,15 @@ class _AiChatState extends State<AiChatPage> {
                     child: Row(children: [
                       const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
                       const SizedBox(width: 8),
-                      Text(s.t('aithinking'), style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(.6), fontSize: 13)),
+                      // v10.1.1: a model fallback announces
+                      // itself here ("Thinking… (Switched to …)")
+                      // so the switch is never silent.
+                      Expanded(
+                        child: Text(
+                          modelSwitchNote == null ? s.t('aithinking') : '${s.t('aithinking')} ($modelSwitchNote)',
+                          style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(.6), fontSize: 13),
+                        ),
+                      ),
                     ]),
                   );
                 }
@@ -2314,6 +2691,15 @@ class _AiChatState extends State<AiChatPage> {
                                     style: TextStyle(fontSize: 11, color: cs.onSurface.withOpacity(.55)),
                                   ),
                               ]),
+                              // v10.1.1: three small shortcuts
+                              // under the Connected message ONLY,
+                              // and only while it is still the
+                              // last message — the next message
+                              // (from either side) hides them.
+                              if (connectedShortcutIndex == i &&
+                                  i == msgs.length - 1 &&
+                                  connectedShortcutLink != null)
+                                _connectedShortcuts(s, connectedShortcutLink!),
                             ],
                           ),
                         ),
@@ -2424,11 +2810,14 @@ class _AiChatState extends State<AiChatPage> {
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 12),
               separatorBuilder: (_, __) => const SizedBox(width: 6),
-              itemCount: _readyQuestions.length,
+              itemCount: readyQuestions.length,
               itemBuilder: (_, i) {
-                final q = _readyQuestions[i];
+                final q = readyQuestions[i];
+                final flag = qFlags[i];
                 return ActionChip(
-                  avatar: Icon(_qIcons[i], size: 16),
+                  avatar: flag != null
+                      ? Text(flag, style: const TextStyle(fontSize: 16))
+                      : Icon(_qIcons[i], size: 16),
                   label: Text(fa ? q[1] : q[0], style: const TextStyle(fontSize: 12)),
                   onPressed: busy ? null : () => _send(fa ? q[1] : q[0]),
                 );
