@@ -146,7 +146,13 @@ class _Msg {
   // style). Null only for chats saved before v1.0.10, whose
   // messages show no time.
   final DateTime? time;
-  const _Msg(this.user, this.text, [this.attach, this.time]);
+  // The connected link this message announced, if it is a
+  // connection-success message. Persisted, so the shortcuts under
+  // it survive leaving and returning to the chat; visibility is
+  // derived (latest such message + still connected to that link),
+  // so a disconnect or a newer connection hides them again.
+  final String? connLink;
+  const _Msg(this.user, this.text, [this.attach, this.time, this.connLink]);
 }
 
 /// One saved conversation for the history sidebar.
@@ -282,6 +288,28 @@ enum _ActionKind { find, connect, disconnect, mode, psiphon }
 /// _send catches it before any network/psiphon fallback, so a
 /// cancelled generation posts "Cancelled", never a failure or a
 /// Psiphon detour.
+/// Index of the latest message that announced a connection, or -1.
+/// The shortcuts row belongs to that message alone: an older
+/// connection message never keeps it after a newer connection.
+int lastConnectedMessageIndex(List<String?> connLinks) {
+  for (var i = connLinks.length - 1; i >= 0; i--) {
+    if (connLinks[i] != null) return i;
+  }
+  return -1;
+}
+
+/// Whether the shortcuts row shows under a connection message:
+/// only the latest connection message, only while still connected
+/// to that exact link. A disconnect, or a newer connection to any
+/// link, hides it from older messages.
+bool connShortcutsVisible({
+  required bool connected,
+  required String? currentLink,
+  required String? msgLink,
+  required bool isLastConn,
+}) =>
+    connected && isLastConn && msgLink != null && currentLink == msgLink;
+
 class _ChatCancelled implements Exception {}
 
 class _Action {
@@ -763,8 +791,7 @@ class _AiChatState extends State<AiChatPage> {
   // only while that message is still the last one, so the next
   // message (from either side) hides them automatically. They are
   // transient — never saved with the chat.
-  int? connectedShortcutIndex;
-  String? connectedShortcutLink;
+
   // v10.1.1: model-fallback note, shown in the thinking row while
   // the retry runs ("Switched to …").
   String? modelSwitchNote;
@@ -844,6 +871,7 @@ class _AiChatState extends State<AiChatPage> {
             '${xm['t'] ?? ''}',
             xm['a'] as String?,
             ts is int ? DateTime.fromMillisecondsSinceEpoch(ts) : null,
+            xm['cl'] as String?,
           ));
         }
         savedChats.add(_Chat(
@@ -898,6 +926,7 @@ class _AiChatState extends State<AiChatPage> {
                           if (m.attach != null) 'a': m.attach,
                           if (m.time != null)
                             'ts': m.time!.millisecondsSinceEpoch,
+                          if (m.connLink != null) 'cl': m.connLink,
                         })
                     .toList(),
               })
@@ -920,11 +949,10 @@ class _AiChatState extends State<AiChatPage> {
     pendingImageName = null;
     pendingImageMime = null;
     actionProgress = null;
-    // Shortcuts belong to one live session only: switching or
-    // starting a chat must never show them under another chat's
-    // message with a coincidentally equal index.
-    connectedShortcutIndex = null;
-    connectedShortcutLink = null;
+    // Shortcut visibility is derived from the messages themselves
+    // (latest connection message + still connected to that link),
+    // so switching chats can never leak one chat's shortcuts into
+    // another's.
   }
 
   void _switchChat(_Chat c) {
@@ -1387,11 +1415,19 @@ class _AiChatState extends State<AiChatPage> {
             label: Text(s.t('favorites'), style: labelStyle),
             style: btnStyle,
             onPressed: () {
+              // v10.1.3: stay in the chat — the star lights up
+              // and a notification confirms it. No chat message,
+              // no page navigation.
               s.toggleFavorite(link);
-              setState(() {
-                msgs.add(_m(false, s.t(fav ? 'aifavremoved' : 'aifavadded')));
-              });
-              _saveChats();
+              final added = !fav;
+              setState(() {});
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content:
+                      Text(s.t(added ? 'aifavadded' : 'aifavremoved')),
+                  duration: const Duration(seconds: 1),
+                ),
+              );
             },
           ),
           TextButton.icon(
@@ -1550,18 +1586,20 @@ class _AiChatState extends State<AiChatPage> {
           return;
         }
         final cur = s.engine.state;
-        final msgIndex = msgs.length;
+        final connLink = s.engine.currentLink;
         setState(() {
           actionProgress = null;
           actionProgressTesting = false;
           actionProgressCancellable = false;
-          // Shortcuts live under this message only, while it
-          // is still the last message (see the bubble builder).
-          connectedShortcutIndex = msgIndex;
-          connectedShortcutLink = s.engine.currentLink;
-          msgs.add(_m(
+          // The shortcuts live under this message (persisted on
+          // it) until a disconnect or a newer connection hides
+          // them — later messages and page returns keep them.
+          msgs.add(_Msg(
             false,
             '${s.tLang('aiconnected', fa)} ${cur.configName ?? ''}${cur.delayMs == null ? '' : ' (${cur.delayMs} ms)'}',
+            null,
+            DateTime.now(),
+            connLink,
           ));
         });
         _saveChats();
@@ -2739,15 +2777,24 @@ class _AiChatState extends State<AiChatPage> {
                                     style: TextStyle(fontSize: 11, color: cs.onSurface.withOpacity(.55)),
                                   ),
                               ]),
-                              // v10.1.1: three small shortcuts
-                              // under the Connected message ONLY,
-                              // and only while it is still the
-                              // last message — the next message
-                              // (from either side) hides them.
-                              if (connectedShortcutIndex == i &&
-                                  i == msgs.length - 1 &&
-                                  connectedShortcutLink != null)
-                                _connectedShortcuts(s, connectedShortcutLink!),
+                              // v10.1.3: three small shortcuts
+                              // under the LATEST connection
+                              // message, while still connected
+                              // to that same link. Later messages
+                              // and page returns keep them; a
+                              // disconnect or a newer connection
+                              // hides them again.
+                              if (connShortcutsVisible(
+                                connected: s.engine.state.phase ==
+                                    Phase.connected,
+                                currentLink: s.engine.currentLink,
+                                msgLink: m.connLink,
+                                isLastConn: i ==
+                                    lastConnectedMessageIndex(msgs
+                                        .map((x) => x.connLink)
+                                        .toList()),
+                              ))
+                                _connectedShortcuts(s, m.connLink!),
                             ],
                           ),
                         ),
