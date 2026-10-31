@@ -24,7 +24,7 @@ const kBuildNum = String.fromEnvironment('BUILD_NUM', defaultValue: '0');
 // number. Keep in sync with pubspec.yaml's version (the part
 // before the +build number). kBuildNum above stays for the
 // in-app update check's digit comparison only.
-const kAppVersion = '10.1.5';
+const kAppVersion = '10.1.6';
 
 const _tr = <String, List<String>>{
   'home': ['Home', 'خانه'],
@@ -2058,12 +2058,12 @@ class Store extends ChangeNotifier {
   /// not a chat-side probe filter — tests the pool (its probe
   /// still attempts configs the handshake probe could not reach)
   /// and tries providers in order with priority handling.
-  Future<bool> connectAutoBundles(List<ProviderBundle> bundles) async {
+  Future<bool> connectAutoBundles(List<ProviderBundle> bundles, {bool keepBad = false}) async {
     mode = 'auto';
     save();
     engine.announce(t('connecting'));
     await _prepare();
-    await engine.connectOrdered(bundles, refetch: () async => bundles);
+    await engine.connectOrdered(bundles, refetch: () async => bundles, keepBad: keepBad);
     return engine.state.phase == Phase.connected;
   }
 
