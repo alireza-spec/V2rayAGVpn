@@ -313,6 +313,28 @@ const _tr = <String, List<String>>{
   'aionline': ['Online', 'آنلاین'],
   'aioffline': ['Offline — no key', 'آفلاین — بدون کلید'],
   'aiattachlogs': ['Attach current logs', 'پیوست لاگ‌های فعلی'],
+  'aiattachmenu': ['Attach', 'پیوست'],
+  'aiphotos': ['Send Photos', 'ارسال عکس'],
+  'aifiles': ['Send Files', 'ارسال فایل'],
+  'ailogs': ['Send current Logs', 'ارسال لاگ‌های فعلی'],
+  'ainovision': ['This model cannot see images — pick a vision-capable model, or send your question as text.', 'این مدل نمی‌تواند عکس ببیند — یک مدل با قابلیت دیدن عکس انتخاب کنید، یا سؤالتان را متنی بفرستید.'],
+  'aibigimage': ['That image is too large to send (max 4 MB).', 'این عکس برای ارسال خیلی بزرگ است (حداکثر ۴ مگابایت).'],
+  'aibigfile': ['That file is too large to attach (max 2 MB of text).', 'این فایل برای پیوست خیلی بزرگ است (حداکثر ۲ مگابایت متن).'],
+  'aibadfile': ['Could not read that file as text.', 'نتوانستم آن فایل را به‌صورت متن بخوانم.'],
+  'aiaddmine': ['Add yours', 'افزودن مدل خودم'],
+  'aicustom': ['Add your own model', 'افزودن مدل خودت'],
+  'aiprovider': ['Provider name', 'نام ارائه‌دهنده'],
+  'aibaseurl': ['Base URL', 'آدرس پایه'],
+  'aiapikey': ['API key', 'کلید API'],
+  'aitestadd': ['Test & Add', 'تست و افزودن'],
+  'aitestok': ['Provider added with its real models.', 'ارائه‌دهنده با مدل‌های واقعی‌اش اضافه شد.'],
+  'aitestfail': ['Test failed', 'تست ناموفق بود'],
+  'aifillall': ['Fill in all three fields.', 'هر سه کادر را پر کنید.'],
+  'ainewchat': ['New chat', 'چت جدید'],
+  'aichats': ['Chats', 'چت‌ها'],
+  'aichatempty': ['No chats yet', 'هنوز چتی نیست'],
+  'aideletechat': ['Delete chat', 'حذف چت'],
+  'customnokey': ['That custom provider is gone — pick a model again.', 'آن ارائه‌دهنده دیگر نیست — دوباره یک مدل انتخاب کنید.'],
   'airemote': ['AI remote config URL (optional)', 'آدرس فایل تنظیمات از راه دور هوش مصنوعی (اختیاری)'],
   'airemote_h': ['A JSON file you host anywhere (for example {"key": "…", "base_url": "…", "model": "…"}). When AI work starts, the app fetches it once and applies the key, base URL and model — so a rotated key reaches all phones with no new app version. Empty = off. Note: anyone with this URL can read the key inside it, just like a key baked into the app.', 'یک فایل JSON که هرجا می‌خواهید میزبانی می‌کنید (مثلاً {"key": "…", "base_url": "…", "model": "…"}). موقع شروع کار با هوش مصنوعی، اپ یک بار آن را می‌خواند و کلید، آدرس پایه و مدل را اعمال می‌کند — پس کلید چرخانده‌شده بدون نسخه جدید اپ به همه گوشی‌ها می‌رسد. خالی = خاموش. توجه: هرکس این آدرس را داشته باشد می‌تواند کلید داخلش را بخواند، درست مثل کلیدی که داخل اپ جاسازی شده است.'],
   'airemoteempty': ['No remote config URL is set.', 'آدرس تنظیمات از راه دور تنظیم نشده است.'],
@@ -536,6 +558,13 @@ class Store extends ChangeNotifier {
   String aiProvider = 'zai';
   String gonkaModel = 'zai-org/GLM-5.3-Flash';
   String gonkaApiKey = '';
+  // User-added providers (Add yours): each carries its own base
+  // URL, key, and the real model list fetched at Test & Add time.
+  // Stored as maps {name, base, key, models}. The keys live only
+  // in this app-private file, never in chat or code.
+  List<Map<String, dynamic>> customProviders = [];
+  String customName = '';
+  String customModel = '';
   String aiRemoteUrl = '';
   String aiRemoteKey = '';
   String aiRemoteBase = '';
@@ -579,6 +608,10 @@ class Store extends ChangeNotifier {
 
   bool get fa => lang == 'fa';
   String t(String k) => (_tr[k] ?? [k, k])[fa ? 1 : 0];
+  // Same lookup as [t] but for an explicit language instead of
+  // the app's UI language — chat replies mirror the language
+  // the user wrote in, not the language of the menus.
+  String tLang(String k, bool fa) => (_tr[k] ?? [k, k])[fa ? 1 : 0];
   void refresh() => notifyListeners();
   void go(int i) {
     tab = i;
@@ -712,6 +745,11 @@ class Store extends ChangeNotifier {
       aiProvider = j['aiProvider'] ?? 'zai';
       gonkaModel = j['gonkaModel'] ?? 'zai-org/GLM-5.3-Flash';
       gonkaApiKey = j['gonkaApiKey'] ?? '';
+      customProviders = (j['customProviders'] as List? ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+      customName = j['customName'] ?? '';
+      customModel = j['customModel'] ?? '';
       aiRemoteUrl = j['aiRemoteUrl'] ?? '';
       aiRemoteKey = j['aiRemoteKey'] ?? '';
       aiRemoteBase = j['aiRemoteBase'] ?? '';
@@ -746,7 +784,7 @@ class Store extends ChangeNotifier {
         'providerLastRefresh': providerLastRefresh, 'srcCache': srcCache, 'providersExpanded': providersExpanded, 'connType': connType, 'appMode': appMode, 'appSet': appSet.toList(),
         'cdnLinks': cdnLinks, 'fragment': fragment, 'fragAll': fragAll, 'fragLen': fragLen, 'fragInt': fragInt, 'testUrl': testUrl, 'autoSortAfterTest': autoSortAfterTest, 'deleteConfirm': deleteConfirm,
         'subFirst': subFirst, 'subLinks': subLinks, 'subRemoved': subRemoved,
-        'useIpv6': useIpv6, 'userHosts': userHosts, 'aiApiKey': aiApiKey, 'aiModel': aiModel, 'aiProvider': aiProvider, 'gonkaModel': gonkaModel, 'gonkaApiKey': gonkaApiKey, 'aiRemoteUrl': aiRemoteUrl, 'aiRemoteKey': aiRemoteKey, 'aiRemoteBase': aiRemoteBase, 'aiRemoteModel': aiRemoteModel, 'aiViaPsiphon': aiViaPsiphon, 'sharedProxyHost': sharedProxyHost, 'sharedProxyPort': sharedProxyPort, 'sharedProxyUser': sharedProxyUser, 'sharedProxyPass': sharedProxyPass, 'sharePort': sharePort,
+        'useIpv6': useIpv6, 'userHosts': userHosts, 'aiApiKey': aiApiKey, 'aiModel': aiModel, 'aiProvider': aiProvider, 'gonkaModel': gonkaModel, 'gonkaApiKey': gonkaApiKey, 'customProviders': customProviders, 'customName': customName, 'customModel': customModel, 'aiRemoteUrl': aiRemoteUrl, 'aiRemoteKey': aiRemoteKey, 'aiRemoteBase': aiRemoteBase, 'aiRemoteModel': aiRemoteModel, 'aiViaPsiphon': aiViaPsiphon, 'sharedProxyHost': sharedProxyHost, 'sharedProxyPort': sharedProxyPort, 'sharedProxyUser': sharedProxyUser, 'sharedProxyPass': sharedProxyPass, 'sharePort': sharePort,
       }));
     } catch (_) {}
     notifyListeners();
@@ -2106,7 +2144,19 @@ class Store extends ChangeNotifier {
   /// Effective model for the current provider: Gonka models are
   /// picked in chat only (the Z.ai remote config never overrides
   /// them); Z.ai keeps remote-then-picked.
-  String get aiChatModel => aiProvider == 'gonka' ? gonkaModel : aiModelEff;
+  String get aiChatModel => aiProvider == 'gonka'
+      ? gonkaModel
+      : (aiProvider == 'custom' && customReady ? customModel : aiModelEff);
+  Map<String, dynamic>? get customProvider {
+    if (customName.isEmpty) return null;
+    for (final p in customProviders) {
+      if (p['name'] == customName) return p;
+    }
+    return null;
+  }
+  String get customBase => (customProvider?['base'] as String? ?? '').replaceAll(RegExp(r'/+$'), '');
+  String get customKey => (customProvider?['key'] as String? ?? '');
+  bool get customReady => customProvider != null && customKey.isNotEmpty && customModel.isNotEmpty;
 
   /// Fetches the remote AI config JSON once (called when AI work
   /// starts, and from the manual refresh button). Accepted fields
