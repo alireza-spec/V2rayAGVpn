@@ -102,7 +102,12 @@ class _Msg {
   // file name, photo name) — shown as a caption under the bubble
   // so a sent attachment stays visible in the conversation.
   final String? attach;
-  const _Msg(this.user, this.text, [this.attach]);
+  // When the message was sent, so every bubble can show its
+  // time (English digits, small, under the message, Telegram
+  // style). Null only for chats saved before v1.0.10, whose
+  // messages show no time.
+  final DateTime? time;
+  const _Msg(this.user, this.text, [this.attach, this.time]);
 }
 
 /// One saved conversation for the history sidebar.
@@ -131,17 +136,123 @@ bool _replyFa(Store s, String q) {
 TextDirection _dirOf(String t) =>
     _isFaText(t) ? TextDirection.rtl : TextDirection.ltr;
 
-enum _ActionKind { find, connect, disconnect, mode }
+/// "14:32" — built from ints, so the digits are always
+/// English regardless of the device locale.
+String _fmtTime(DateTime t) =>
+    '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+/// Display name for a country code, in the chat's language:
+/// the longest Latin name for English ("America"), the last
+/// (Persian) name for Persian ("آمریکا").
+String _countryName(String code, bool fa) {
+  final names = _countries[code];
+  if (names == null || names.length < 2) return code.toUpperCase();
+  if (fa) return names.last;
+  final latin = names
+      .sublist(1)
+      .where((n) => RegExp(r'^[a-z ]+$').hasMatch(n))
+      .toList();
+  if (latin.isEmpty) return code.toUpperCase();
+  var best = latin.first;
+  for (final n in latin) {
+    if (n.length > best.length) best = n;
+  }
+  return best[0].toUpperCase() + best.substring(1);
+}
+
+/// Analytic sidebar title for a chat, from its first message:
+/// a category ("Connection failure"), not the message itself
+/// ("hi why won't it connect?"), so the sidebar stays
+/// scannable days later.
+String _smartTitle(String q, bool fa) {
+  final low = q.toLowerCase();
+  String pick(String en, String faTitle) => fa ? faTitle : en;
+  if (q.contains('قطع') ||
+      low.contains('disconnect') ||
+      low.contains('drop')) {
+    return pick('Connection drops', 'قطع شدن اتصال');
+  }
+  if (q.contains('وصل نمی‌شه') ||
+      q.contains('متصل نمی‌شه') ||
+      low.contains("won't connect") ||
+      low.contains('cannot connect') ||
+      low.contains("can't connect") ||
+      low.contains('not connecting')) {
+    return pick('Connection failure', 'رفع مشکل وصل نشدن');
+  }
+  if (q.contains('وصل') || q.contains('متصل') || low.contains('connect')) {
+    final code = _countryIn(q);
+    if (code != null) {
+      final name = _countryName(code, fa);
+      return fa ? 'اتصال به $name' : 'Connect to $name';
+    }
+    return pick('Connect to a server', 'اتصال به سرور');
+  }
+  if (q.contains('سرعت') ||
+      q.contains('کند') ||
+      q.contains('پینگ') ||
+      low.contains('speed') ||
+      low.contains('slow') ||
+      low.contains('ping')) {
+    return pick('Connection speed', 'سرعت اتصال');
+  }
+  if (q.contains('لاگ') || low.contains('log')) {
+    return pick('Log explanations', 'توضیح لاگ‌ها');
+  }
+  if (q.contains('اشتراک') || low.contains('share')) {
+    return pick('Share VPN', 'اشتراک‌گذاری VPN');
+  }
+  if (q.contains('فرانتینگ') || low.contains('cdn')) {
+    return pick('CDN Fronting', 'فرانتینگ CDN');
+  }
+  if (q.contains('سایفون') || low.contains('psiphon')) {
+    return pick('Psiphon', 'سایفون');
+  }
+  if (q.contains('سرور') || low.contains('server')) {
+    return pick('Server choice', 'انتخاب سرور');
+  }
+  if (q.contains('ابزار') || low.contains('tool')) {
+    return pick('Tools', 'ابزارها');
+  }
+  return q.length > 30 ? '${q.substring(0, 30)}…' : q;
+}
+
+enum _ActionKind { find, connect, disconnect, mode, psiphon }
 
 class _Action {
   final _ActionKind kind;
-  final String? link, remark, message, mode;
-  const _Action(this.kind, {this.link, this.remark, this.message, this.mode});
+  final String? link, remark, message, mode, country;
+  // "disconnect and connect to X": stop the current tunnel
+  // first, then connect — one message, one sequence.
+  final bool disconnectFirst;
+  const _Action(this.kind,
+      {this.link,
+      this.remark,
+      this.message,
+      this.mode,
+      this.country,
+      this.disconnectFirst = false});
 }
 
 /// Direct answer from measured state, no AI call: "what
 /// location am I on?" must never be stitched together or
 /// guessed by the model — the app knows the exit IP for sure.
+String _fmtBytes(int b) {
+  if (b < 1024) return '$b B';
+  if (b < 1024 * 1024) return '${(b / 1024).toStringAsFixed(1)} KB';
+  if (b < 1024 * 1024 * 1024) {
+    return '${(b / 1024 / 1024).toStringAsFixed(1)} MB';
+  }
+  return '${(b / 1024 / 1024 / 1024).toStringAsFixed(2)} GB';
+}
+
+String _fmtDur(int sec) {
+  final h = (sec ~/ 3600).toString().padLeft(2, '0');
+  final m = ((sec % 3600) ~/ 60).toString().padLeft(2, '0');
+  final s = (sec % 60).toString().padLeft(2, '0');
+  return '$h:$m:$s';
+}
+
 String? _localAnswer(Store s, String q, bool fa) {
   final low = q.toLowerCase();
   final isWhere = RegExp(
@@ -149,6 +260,53 @@ String? _localAnswer(Store s, String q, bool fa) {
   ).hasMatch(q) ||
       RegExp(r'where am i connected|what location am i|what.{0,20}my (ip|location)')
           .hasMatch(low);
+  // "How is my ping/traffic/speed?" — answered from the live
+  // connection's own counters, never guessed by the model.
+  final isStats = RegExp(r'پینگش|سرعتش|ترافیک|وضعیت اتصال|مصرف')
+          .hasMatch(q) ||
+      RegExp(r'\b(my )?(ping|speed|traffic|download|upload)\b|connection status')
+          .hasMatch(low);
+  if (isStats) {
+    final e = s.engine.state;
+    if (e.phase == Phase.connected) {
+      final t = e.traffic;
+      if (fa) {
+        return 'اتصال فعلی: ${e.configName ?? ''}'
+            '${e.exitIp == null ? '' : '\nآی‌پی خروجی: ${e.exitIp}'}'
+            '${e.location == null ? '' : '\nلوکیشن: ${e.location}'}'
+            '${e.delayMs == null ? '' : '\nپینگ: ${e.delayMs} ms'}'
+            '\nمدت اتصال: ${_fmtDur(t.durationSec)}'
+            '\nدانلود: ${_fmtBytes(t.downSpeed)}/s (مجموع ${_fmtBytes(t.downTotal)})'
+            '\nآپلود: ${_fmtBytes(t.upSpeed)}/s (مجموع ${_fmtBytes(t.upTotal)})';
+      }
+      return 'Current connection: ${e.configName ?? ''}'
+          '${e.exitIp == null ? '' : '\nExit IP: ${e.exitIp}'}'
+          '${e.location == null ? '' : '\nLocation: ${e.location}'}'
+          '${e.delayMs == null ? '' : '\nPing: ${e.delayMs} ms'}'
+          '\nDuration: ${_fmtDur(t.durationSec)}'
+          '\nDownload: ${_fmtBytes(t.downSpeed)}/s (total ${_fmtBytes(t.downTotal)})'
+          '\nUpload: ${_fmtBytes(t.upSpeed)}/s (total ${_fmtBytes(t.upTotal)})';
+    }
+    final p = s.psiphon.state;
+    if (p.phase == PsiphonPhase.connected) {
+      final dur = p.connectedAt == null
+          ? null
+          : _fmtDur(DateTime.now().difference(p.connectedAt!).inSeconds);
+      if (fa) {
+        return 'اتصال فعلی: سایفون'
+            '${p.exitIp == null ? '' : '\nآی‌پی خروجی: ${p.exitIp}'}'
+            '${p.location == null ? '' : '\nلوکیشن: ${p.location}'}'
+            '${p.pingMs == null ? '' : '\nپینگ: ${p.pingMs} ms'}'
+            '${dur == null ? '' : '\nمدت اتصال: $dur'}';
+      }
+      return 'Current connection: Psiphon'
+          '${p.exitIp == null ? '' : '\nExit IP: ${p.exitIp}'}'
+          '${p.location == null ? '' : '\nLocation: ${p.location}'}'
+          '${p.pingMs == null ? '' : '\nPing: ${p.pingMs} ms'}'
+          '${dur == null ? '' : '\nDuration: $dur'}';
+    }
+    return s.tLang('aistatsnone', fa);
+  }
   if (!isWhere) return null;
   final e = s.engine.state;
   if (e.phase == Phase.connected) {
@@ -189,8 +347,39 @@ _Action? _actionFor(Store s, String q) {
       q.contains('چرا') ||
       RegExp(r'\b(how|why|what is|what does)\b').hasMatch(low);
   if (isInfo) return null;
-  if (RegExp(r'قطع(ش| اتصال)? کن').hasMatch(q) ||
-      RegExp(r'\bdisconnect\b').hasMatch(low)) {
+  // Verbs first, so the combined cases below can use them.
+  // "وصل کنی؟" contains "وصل کن" as a substring, so polite
+  // requests already match these verbs — the old ؟ block was
+  // the only thing stopping them.
+  final wantsConnect = q.contains('وصل کن') ||
+      q.contains('متصلم کن') ||
+      q.contains('وصلش کن') ||
+      q.contains('متصل کن') ||
+      q.contains('وصل شو') ||
+      q.contains('متصل شو') ||
+      q.contains('کانکت کن') ||
+      RegExp(r'\bconnect\b').hasMatch(low);
+  // "لیست..." is a find request too ("لیست سرورهای آمریکا"):
+  // the old code only knew پیدا کن / می‌خوام / find.
+  final wantsFind = q.contains('پیدا کن') ||
+      q.contains('می‌خوام') ||
+      q.contains('میخوام') ||
+      q.contains('لیست') ||
+      q.contains('نشون بده') ||
+      q.contains('نمایش بده') ||
+      RegExp(r'\b(find|list|show)\b').hasMatch(low);
+  final hasDisconnect = RegExp(r'قطع(ش| اتصال)? کن').hasMatch(q) ||
+      RegExp(r'\bdisconnect\b').hasMatch(low);
+  final psiWord = q.contains('سایفون') || low.contains('psiphon');
+  final code = _countryIn(q);
+  // "به سرور آمریکا سایفون وصل کن": Psiphon to that country,
+  // not a Personal config — a mode switch alone never connects.
+  if (psiWord && code != null && wantsConnect) {
+    return _Action(_ActionKind.psiphon, country: code);
+  }
+  // "قطع کن و به X وصل کن": one sequence, not just a
+  // disconnect — the connect below carries disconnectFirst.
+  if (hasDisconnect && !wantsConnect) {
     return const _Action(_ActionKind.disconnect);
   }
   const modeWords = {
@@ -212,28 +401,7 @@ _Action? _actionFor(Store s, String q) {
       }
     }
   }
-  // "وصل کنی؟" contains "وصل کن" as a substring, so polite
-  // requests already match these verbs — the old ؟ block was
-  // the only thing stopping them.
-  final wantsConnect = q.contains('وصل کن') ||
-      q.contains('متصلم کن') ||
-      q.contains('وصلش کن') ||
-      q.contains('متصل کن') ||
-      q.contains('وصل شو') ||
-      q.contains('متصل شو') ||
-      q.contains('کانکت کن') ||
-      RegExp(r'\bconnect\b').hasMatch(low);
-  // "لیست..." is a find request too ("لیست سرورهای آمریکا"):
-  // the old code only knew پیدا کن / می‌خوام / find.
-  final wantsFind = q.contains('پیدا کن') ||
-      q.contains('می‌خوام') ||
-      q.contains('میخوام') ||
-      q.contains('لیست') ||
-      q.contains('نشون بده') ||
-      q.contains('نمایش بده') ||
-      RegExp(r'\b(find|list|show)\b').hasMatch(low);
   if (!wantsConnect && !wantsFind) return null;
-  final code = _countryIn(q);
   final tested = <MapEntry<String, int>>[];
   final untested = <String>[];
   for (final b in s.buildBundles()) {
@@ -256,7 +424,8 @@ _Action? _actionFor(Store s, String q) {
     if (link == null) {
       return _Action(_ActionKind.find, message: s.tLang('ainofound', fa));
     }
-    return _Action(_ActionKind.connect, link: link, remark: _remarkOf(link));
+    return _Action(_ActionKind.connect,
+        link: link, remark: _remarkOf(link), disconnectFirst: hasDisconnect);
   }
   if (tested.isEmpty && untested.isEmpty) {
     return _Action(_ActionKind.find, message: s.tLang('ainofound', fa));
@@ -275,9 +444,13 @@ _Action? _actionFor(Store s, String q) {
 /// sends it as the user's message.
 /// Icons for the ready questions, in the same order: connect,
 /// drop, best server, share, logs, CDN, Psiphon, tools.
-const _qIcons = [Icons.link_off, Icons.wifi_off, Icons.star, Icons.share, Icons.bug_report, Icons.dns, Icons.shield, Icons.build];
+const _qIcons = [Icons.public, Icons.link_off, Icons.wifi_off, Icons.star, Icons.share, Icons.bug_report, Icons.dns, Icons.shield, Icons.build];
 
 const _readyQuestions = [
+  // First: the one users actually ask for most — and it IS an
+  // action ("connect me"), not just a question, so tapping it
+  // really connects (see _actionFor).
+  ['Connect me to a US server', 'منو به یه سرور آمریکا وصل کن'],
   ['Why won\'t it connect?', 'چرا وصل نمی‌شه؟'],
   ['Why does my connection drop?', 'چرا اتصالم قطع می‌شه؟'],
   ['Which server is best for me?', 'کدوم سرور برای من بهتره؟'],
@@ -402,6 +575,11 @@ class _AiChatState extends State<AiChatPage> {
   String currentTitle = '';
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
+  /// A new message, stamped with "now" so its bubble can show
+  /// its time. Loaded history keeps its saved stamp instead.
+  _Msg _m(bool user, String text, [String? attach]) =>
+      _Msg(user, text, attach, DateTime.now());
+
   @override
   void initState() {
     super.initState();
@@ -461,7 +639,13 @@ class _AiChatState extends State<AiChatPage> {
         final ms = <_Msg>[];
         for (final x in (m['msgs'] as List? ?? [])) {
           final xm = x as Map<String, dynamic>;
-          ms.add(_Msg(xm['u'] == true, '${xm['t'] ?? ''}', xm['a'] as String?));
+          final ts = xm['ts'];
+          ms.add(_Msg(
+            xm['u'] == true,
+            '${xm['t'] ?? ''}',
+            xm['a'] as String?,
+            ts is int ? DateTime.fromMillisecondsSinceEpoch(ts) : null,
+          ));
         }
         savedChats.add(_Chat(id: '${m['id'] ?? ''}', title: '${m['title'] ?? ''}', msgs: ms));
       }
@@ -504,6 +688,8 @@ class _AiChatState extends State<AiChatPage> {
                           'u': m.user,
                           't': m.text,
                           if (m.attach != null) 'a': m.attach,
+                          if (m.time != null)
+                            'ts': m.time!.millisecondsSinceEpoch,
                         })
                     .toList(),
               })
@@ -566,10 +752,12 @@ class _AiChatState extends State<AiChatPage> {
     final fa = _replyFa(s, q);
     final sendAttach = attachLabel ?? pendingImageName;
     if (currentTitle.isEmpty) {
-      currentTitle = q.length > 30 ? '${q.substring(0, 30)}…' : q;
+      // Analytic title, not the first message itself — the
+      // sidebar must stay scannable days later.
+      currentTitle = _smartTitle(q, fa);
     }
     setState(() {
-      msgs.add(_Msg(true, q, sendAttach));
+      msgs.add(_m(true, q, sendAttach));
       busy = true;
     });
     _saveChats();
@@ -579,7 +767,7 @@ class _AiChatState extends State<AiChatPage> {
     if (local != null) {
       if (mounted) {
         setState(() {
-          msgs.add(_Msg(false, local));
+          msgs.add(_m(false, local));
           busy = false;
         });
         _saveChats();
@@ -603,7 +791,7 @@ class _AiChatState extends State<AiChatPage> {
     if (!keyOk) {
       if (mounted) {
         setState(() {
-          msgs.add(_Msg(
+          msgs.add(_m(
               false,
               s.aiProvider == 'gonka'
                   ? s.tLang('gonkanokey', fa)
@@ -652,7 +840,7 @@ class _AiChatState extends State<AiChatPage> {
       final reply = await _chat(s, history, fa: fa);
       if (!mounted) return;
       setState(() {
-        msgs.add(_Msg(false, reply));
+        msgs.add(_m(false, reply));
         history.add({'role': 'assistant', 'content': reply});
         busy = false;
       });
@@ -670,7 +858,7 @@ class _AiChatState extends State<AiChatPage> {
       // the setting on, start Psiphon in proxy form just for this
       // answer and route the retry through its HTTP proxy.
       if (isNet && !connected && s.aiViaPsiphon) {
-        if (mounted) setState(() => msgs.add(_Msg(false, s.tLang('aipsi', fa))));
+        if (mounted) setState(() => msgs.add(_m(false, s.tLang('aipsi', fa))));
         final ok = await _startPsiphonForAi(s);
         if (ok && mounted) {
           final httpPort = s.psiphon.state.httpPort;
@@ -679,7 +867,7 @@ class _AiChatState extends State<AiChatPage> {
               final reply = await _chat(s, history, proxyPort: httpPort, fa: fa);
               if (!mounted) return;
               setState(() {
-                msgs.add(_Msg(false, reply));
+                msgs.add(_m(false, reply));
                 history.add({'role': 'assistant', 'content': reply});
                 busy = false;
               });
@@ -692,7 +880,7 @@ class _AiChatState extends State<AiChatPage> {
         }
         if (mounted) {
           setState(() {
-            msgs.add(_Msg(false, s.tLang('aipsifail', fa)));
+            msgs.add(_m(false, s.tLang('aipsifail', fa)));
             busy = false;
           });
           history.removeLast();
@@ -706,7 +894,7 @@ class _AiChatState extends State<AiChatPage> {
               ? (connected ? s.tLang('ainetconn', fa) : s.tLang('ainet', fa))
               : 'network error';
       setState(() {
-        msgs.add(_Msg(false, '${s.tLang('aifailed', fa)}: $detail'));
+        msgs.add(_m(false, '${s.tLang('aifailed', fa)}: $detail'));
         busy = false;
       });
       history.removeLast();
@@ -769,7 +957,7 @@ class _AiChatState extends State<AiChatPage> {
         await s.disconnectAll();
         if (!mounted) return;
         setState(() {
-          msgs.add(_Msg(false, s.tLang('aidisconnected', fa)));
+          msgs.add(_m(false, s.tLang('aidisconnected', fa)));
           busy = false;
         });
       case _ActionKind.mode:
@@ -777,13 +965,13 @@ class _AiChatState extends State<AiChatPage> {
         s.save();
         if (!mounted) return;
         setState(() {
-          msgs.add(_Msg(false, '${s.tLang('aimodeset', fa)} ${s.tLang(a.mode!, fa)}'));
+          msgs.add(_m(false, '${s.tLang('aimodeset', fa)} ${s.tLang(a.mode!, fa)}'));
           busy = false;
         });
       case _ActionKind.find:
         if (!mounted) return;
         setState(() {
-          msgs.add(_Msg(false, a.message!));
+          msgs.add(_m(false, a.message!));
           busy = false;
         });
       case _ActionKind.connect:
@@ -793,11 +981,21 @@ class _AiChatState extends State<AiChatPage> {
         // or the 90s wait expires.
         if (mounted) {
           setState(() {
-            msgs.add(_Msg(false, '${s.tLang('aiconnecting', fa)} ${a.remark}…'));
+            msgs.add(_m(false, '${s.tLang('aiconnecting', fa)} ${a.remark}…'));
             actionProgress = a.remark;
             actionProgressFa = fa;
             busy = false;
           });
+        }
+        // Switching while connected, or "disconnect and connect
+        // to X": stop the current tunnel first. Starting a new
+        // connect on top of a live session is exactly what used
+        // to make the chat answer "you are already connected"
+        // instead of switching.
+        if (a.disconnectFirst ||
+            s.engine.state.phase == Phase.connected ||
+            s.psiphon.state.phase == PsiphonPhase.connected) {
+          await s.disconnectAll();
         }
         s.connectLink(a.link!);
         try {
@@ -807,22 +1005,98 @@ class _AiChatState extends State<AiChatPage> {
               )
               .timeout(const Duration(seconds: 90));
           if (!mounted) return;
+          final ok = st.phase == Phase.connected;
           setState(() {
             actionProgress = null;
             msgs.add(
-              _Msg(
+              _m(
                 false,
-                st.phase == Phase.connected
+                ok
                     ? '${s.tLang('aiconnected', fa)} ${st.configName ?? a.remark}${st.delayMs == null ? '' : ' (${st.delayMs} ms)'}'
                     : '${s.tLang('aiconnectfail', fa)} ${st.message}',
               ),
             );
           });
+          // Success leaves the chat for the Connected page, so
+          // the user SEES the connection — after the message,
+          // with a beat to read it. Failure and disconnect stay
+          // in the chat, as asked.
+          if (ok) {
+            await Future.delayed(const Duration(milliseconds: 900));
+            if (mounted) {
+              Navigator.of(context).popUntil((route) => route.isFirst);
+            }
+          }
         } on TimeoutException {
           if (!mounted) return;
           setState(() {
             actionProgress = null;
-            msgs.add(_Msg(false, s.tLang('aiconnectwait', fa)));
+            msgs.add(_m(false, s.tLang('aiconnectwait', fa)));
+          });
+        }
+      case _ActionKind.psiphon:
+        // Psiphon to a country: mode + region, then the normal
+        // Psiphon connect (the tunnel reports through
+        // psiphon.state, not engine.states, so it is polled
+        // here, up to 120s — Psiphon is slow on filtered
+        // networks and must not hang the chat forever).
+        final name = _countryName(a.country!, fa);
+        if (mounted) {
+          setState(() {
+            msgs.add(_m(false, '${s.tLang('aiconnecting', fa)} Psiphon $name…'));
+            actionProgress = 'Psiphon $name';
+            actionProgressFa = fa;
+            busy = false;
+          });
+        }
+        if (s.engine.state.phase == Phase.connected ||
+            s.psiphon.state.phase == PsiphonPhase.connected) {
+          await s.disconnectAll();
+        }
+        s.mode = 'psiphon';
+        s.psiCountry = a.country!;
+        s.save();
+        unawaited(s.connect());
+        PsiphonPhase? settled;
+        for (var i = 0; i < 120; i++) {
+          final ph = s.psiphon.state.phase;
+          if (ph == PsiphonPhase.connected ||
+              ph == PsiphonPhase.failed ||
+              ph == PsiphonPhase.idle) {
+            settled = ph;
+            break;
+          }
+          await Future.delayed(const Duration(seconds: 1));
+        }
+        if (!mounted) return;
+        if (settled == PsiphonPhase.connected) {
+          final p = s.psiphon.state;
+          setState(() {
+            actionProgress = null;
+            msgs.add(_m(
+              false,
+              '${s.tLang('aipsiconnected', fa)} $name'
+              '${p.exitIp == null ? '' : ' — ${p.exitIp}'}'
+              '${p.location == null ? '' : ' (${p.location})'}',
+            ));
+          });
+          await Future.delayed(const Duration(milliseconds: 900));
+          if (mounted) {
+            Navigator.of(context).popUntil((route) => route.isFirst);
+          }
+        } else if (settled == PsiphonPhase.failed) {
+          setState(() {
+            actionProgress = null;
+            msgs.add(_m(
+              false,
+              '${s.tLang('aiconnectfail', fa)}'
+              '${s.psiphonVpnError.isEmpty ? '' : ' — ${s.psiphonVpnError}'}',
+            ));
+          });
+        } else {
+          setState(() {
+            actionProgress = null;
+            msgs.add(_m(false, s.tLang('aiconnectwait', fa)));
           });
         }
     }
@@ -1028,6 +1302,155 @@ class _AiChatState extends State<AiChatPage> {
   /// calls the provider's own /models list with the key: only a
   /// 200 with real model IDs adds the provider, with those exact
   /// models — never a guessed model name.
+  /// One user-added provider's section in the model menu: a
+  /// header row (name, collapse arrow, delete ×) plus its
+  /// models when expanded. The header is a disabled item so
+  /// taps on it never pick a model; its buttons close the menu
+  /// themselves, because an open menu cannot rebuild in place
+  /// — the next open shows the new state.
+  List<PopupMenuEntry<String>> _providerMenuItems(Store s, int i) {
+    final name = s.customProviders[i]['name'] as String;
+    final collapsed = s.collapsedProviders.contains(name);
+    return [
+      PopupMenuItem(
+        enabled: false,
+        child: Row(children: [
+          Expanded(
+            child: Text(name, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          ),
+          IconButton(
+            icon: Icon(
+              collapsed ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_up,
+              size: 18,
+            ),
+            padding: const EdgeInsets.all(4),
+            constraints: const BoxConstraints(),
+            onPressed: () {
+              setState(() {
+                if (collapsed) {
+                  s.collapsedProviders.remove(name);
+                } else {
+                  s.collapsedProviders.add(name);
+                }
+                s.save();
+              });
+              Navigator.of(context).pop();
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 18),
+            padding: const EdgeInsets.all(4),
+            constraints: const BoxConstraints(),
+            onPressed: () => _confirmDeleteProvider(name),
+          ),
+        ]),
+      ),
+      if (!collapsed)
+        for (final m in (s.customProviders[i]['models'] as List))
+          PopupMenuItem(
+            value: 'custom:$i:$m',
+            child: GestureDetector(
+              // Long-press deletes just this model (confirm) —
+              // for dead or paid models, while the rest stay.
+              // A quick tap still picks the model normally.
+              onLongPress: () => _confirmDeleteModel(i, '$m'),
+              child: Row(children: [
+                if (s.aiProvider == 'custom' &&
+                    s.customName == name &&
+                    m == s.customModel)
+                  const Icon(Icons.check, size: 16),
+                if (s.aiProvider == 'custom' &&
+                    s.customName == name &&
+                    m == s.customModel)
+                  const SizedBox(width: 6),
+                Expanded(child: Text('$m', style: const TextStyle(fontSize: 13))),
+              ]),
+            ),
+          ),
+    ];
+  }
+
+  /// Delete a whole user-added provider (key + all its models),
+  /// with confirm. After the dialog, the menu behind it closes
+  /// too, so the reopened menu shows the provider gone.
+  Future<void> _confirmDeleteProvider(String name) async {
+    final s = widget.s;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(s.t('aidelprovider')),
+        content: Text('${s.t('aidelprovider_h')}\n$name'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(s.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(s.t('aidelete')),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final wasSelected = s.aiProvider == 'custom' && s.customName == name;
+    s.customProviders.removeWhere((p) => p['name'] == name);
+    s.collapsedProviders.remove(name);
+    if (wasSelected) {
+      s.aiProvider = 'zai';
+      s.customName = '';
+      s.customModel = '';
+    }
+    s.save();
+    setState(() {});
+    Navigator.of(context).pop();
+  }
+
+  /// Delete one model of a user-added provider, with confirm.
+  /// If it was the last model, the provider goes with it (a
+  /// provider with no models cannot be used). If it was the
+  /// selected model, selection falls back to Z.ai.
+  Future<void> _confirmDeleteModel(int i, String model) async {
+    final s = widget.s;
+    if (i < 0 || i >= s.customProviders.length) return;
+    final name = s.customProviders[i]['name'] as String;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(s.t('aidelmodel')),
+        content: Text('${s.t('aidelmodel_h')}\n$model'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(s.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(s.t('aidelete')),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final models = s.customProviders[i]['models'] as List;
+    models.remove(model);
+    final empty = models.isEmpty;
+    if (empty) {
+      s.customProviders.removeAt(i);
+      s.collapsedProviders.remove(name);
+    }
+    if (s.aiProvider == 'custom' &&
+        s.customName == name &&
+        (s.customModel == model || empty)) {
+      s.aiProvider = 'zai';
+      s.customName = '';
+      s.customModel = '';
+    }
+    s.save();
+    setState(() {});
+    Navigator.of(context).pop();
+  }
+
   Future<void> _showAddCustom() async {
     final s = widget.s;
     final nameCtl = TextEditingController();
@@ -1095,6 +1518,9 @@ class _AiChatState extends State<AiChatPage> {
                   'key': key,
                   'models': ids,
                 });
+                // A freshly added provider opens expanded, so the
+                // user picks a model right away.
+                s.collapsedProviders.remove(name);
                 s.save();
                 setD(() {
                   testing = false;
@@ -1169,6 +1595,7 @@ class _AiChatState extends State<AiChatPage> {
                                 s.customName == p['name'];
                             s.customProviders.removeWhere(
                                 (x) => x['name'] == p['name']);
+                            s.collapsedProviders.remove(p['name']);
                             if (wasSelected) {
                               s.aiProvider = 'zai';
                               s.customName = '';
@@ -1356,30 +1783,11 @@ class _AiChatState extends State<AiChatPage> {
                 ),
               // User-added providers, each with its real models
               // from Test & Add time, then Add yours at the bottom.
-              for (var i = 0; i < s.customProviders.length; i++) ...[
-                PopupMenuItem(
-                  enabled: false,
-                  child: Text(
-                    s.customProviders[i]['name'] as String,
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                ),
-                for (final m in (s.customProviders[i]['models'] as List))
-                  PopupMenuItem(
-                    value: 'custom:$i:$m',
-                    child: Row(children: [
-                      if (s.aiProvider == 'custom' &&
-                          s.customName == s.customProviders[i]['name'] &&
-                          m == s.customModel)
-                        const Icon(Icons.check, size: 16),
-                      if (s.aiProvider == 'custom' &&
-                          s.customName == s.customProviders[i]['name'] &&
-                          m == s.customModel)
-                        const SizedBox(width: 6),
-                      Text('$m', style: const TextStyle(fontSize: 13)),
-                    ]),
-                  ),
-              ],
+              // A provider header carries its own delete (×, with
+              // confirm) and collapse arrow; a long-press on one
+              // of its models deletes just that model (confirm).
+              for (var i = 0; i < s.customProviders.length; i++)
+                ..._providerMenuItems(s, i),
               PopupMenuItem(
                 value: '__add__',
                 child: Row(children: [
@@ -1437,7 +1845,7 @@ class _AiChatState extends State<AiChatPage> {
                         Expanded(
                           child: Text(
                             '${s.tLang('aiconnecting', actionProgressFa)} $actionProgress…',
-                            style: const TextStyle(color: Colors.grey, fontSize: 13),
+                            style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(.6), fontSize: 13),
                           ),
                         ),
                       ]),
@@ -1448,63 +1856,88 @@ class _AiChatState extends State<AiChatPage> {
                     child: Row(children: [
                       const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
                       const SizedBox(width: 8),
-                      Text(s.t('aithinking'), style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                      Text(s.t('aithinking'), style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(.6), fontSize: 13)),
                     ]),
                   );
                 }
                 final m = msgs[i];
                 if (!m.user) {
-                  // Assistant: a distinct faint card (Design 1
-                  // refinement) so AI and user messages never blend,
-                  // plain full-width Markdown inside — no raw **.
-                  // Direction comes from the message itself, so a
-                  // Persian answer with English terms inside lays
-                  // out correctly instead of scrambling.
+                  // Design 1 (Telegram style): the AI has a
+                  // profile — a sparkle avatar tinted with the
+                  // theme accent — and its own bubble on the
+                  // left, with the time underneath, so AI and
+                  // user messages never blend. Every color here
+                  // comes from the theme, so changing the app
+                  // theme recolors the chat too. Direction comes
+                  // from the message itself, so a Persian answer
+                  // with English terms inside lays out correctly
+                  // instead of scrambling.
+                  final cs = Theme.of(context).colorScheme;
                   return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.onSurface.withOpacity(.06),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Directionality(
-                            textDirection: _dirOf(m.text),
-                            child: MarkdownBody(
-                              data: m.text,
-                              selectable: true,
-                              styleSheet: MarkdownStyleSheet(
-                                p: const TextStyle(fontSize: 14),
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        CircleAvatar(
+                          radius: 16,
+                          backgroundColor: cs.primary.withOpacity(.18),
+                          child: Icon(Icons.auto_awesome, size: 16, color: cs.primary),
+                        ),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: cs.onSurface.withOpacity(.08),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Directionality(
+                                  textDirection: _dirOf(m.text),
+                                  child: MarkdownBody(
+                                    data: m.text,
+                                    selectable: true,
+                                    styleSheet: MarkdownStyleSheet(
+                                      p: const TextStyle(fontSize: 14),
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
+                              Row(children: [
+                                IconButton(
+                                  icon: const Icon(Icons.copy, size: 16),
+                                  tooltip: s.t('copied'),
+                                  padding: const EdgeInsets.all(4),
+                                  constraints: const BoxConstraints(),
+                                  onPressed: () async {
+                                    await Clipboard.setData(ClipboardData(text: m.text));
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text(s.t('copied')), duration: const Duration(seconds: 1)),
+                                      );
+                                    }
+                                  },
+                                ),
+                                if (m.time != null)
+                                  Text(
+                                    _fmtTime(m.time!),
+                                    style: TextStyle(fontSize: 11, color: cs.onSurface.withOpacity(.55)),
+                                  ),
+                              ]),
+                            ],
                           ),
-                          Row(children: [
-                            IconButton(
-                              icon: const Icon(Icons.copy, size: 16),
-                              tooltip: s.t('copied'),
-                              onPressed: () async {
-                                await Clipboard.setData(ClipboardData(text: m.text));
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text(s.t('copied')), duration: const Duration(seconds: 1)),
-                                  );
-                                }
-                              },
-                            ),
-                          ]),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   );
                 }
-                // Design 1 user bubble: solid accent blue, white
-                // text — not the translucent tint it was before.
-                // The bubble stays on the right; only the text
+                // Design 1 user bubble: solid accent blue, onPrimary
+                // text, on the right; the time sits inside the
+                // bubble's bottom, Telegram style. Only the text
                 // inside takes the message's own direction.
+                final cs = Theme.of(context).colorScheme;
                 return Align(
                   alignment: AlignmentDirectional.centerEnd,
                   child: Column(
@@ -1515,13 +1948,27 @@ class _AiChatState extends State<AiChatPage> {
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                         constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.85),
                         decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.primary,
+                          color: cs.primary,
                           borderRadius: BorderRadius.circular(14),
                         ),
-                        child: SelectableText(
-                          m.text,
-                          textDirection: _dirOf(m.text),
-                          style: TextStyle(fontSize: 14, color: Theme.of(context).colorScheme.onPrimary),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            SelectableText(
+                              m.text,
+                              textDirection: _dirOf(m.text),
+                              style: TextStyle(fontSize: 14, color: cs.onPrimary),
+                            ),
+                            if (m.time != null)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text(
+                                  _fmtTime(m.time!),
+                                  style: TextStyle(fontSize: 11, color: cs.onPrimary.withOpacity(.75)),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                       if (m.attach != null)
@@ -1530,9 +1977,9 @@ class _AiChatState extends State<AiChatPage> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Icons.attach_file, size: 12, color: Colors.grey),
+                              Icon(Icons.attach_file, size: 12, color: cs.onSurface.withOpacity(.55)),
                               const SizedBox(width: 4),
-                              Text(m.attach!, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                              Text(m.attach!, style: TextStyle(fontSize: 11, color: cs.onSurface.withOpacity(.55))),
                             ],
                           ),
                         ),
