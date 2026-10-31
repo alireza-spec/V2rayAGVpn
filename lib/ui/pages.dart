@@ -1127,6 +1127,16 @@ class _PBState extends State<PowerButton> with TickerProviderStateMixin {
   late final AnimationController _wash = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
   String? _washedCc;
 
+  // v10.1.3: continuous solar time — c.value wraps 0..1 every
+  // 2.4 s, so count the wraps (via a listener, not in build)
+  // to keep planet angles continuous across wraps.
+  double _cycles = 0;
+  double _prevV = 0;
+  void _trackCycles() {
+    if (c.value < _prevV) _cycles += 1;
+    _prevV = c.value;
+  }
+
   String? get _cc {
     final c = widget.countryCode;
     if (c == null || c.isEmpty) return null;
@@ -1136,6 +1146,7 @@ class _PBState extends State<PowerButton> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    c.addListener(_trackCycles);
     _maybeStartWash();
   }
 
@@ -1165,12 +1176,14 @@ class _PBState extends State<PowerButton> with TickerProviderStateMixin {
     super.dispose();
   }
 
-  Widget _icon(double v) {
+  Widget _icon() {
     switch (widget.state) {
       case 2:
         return const Icon(Icons.verified_user_rounded, key: ValueKey(2), size: 84, color: Colors.white);
       case 1:
-        return Transform.scale(key: const ValueKey(1), scale: 1 + 0.08 * math.sin(v * 6.2832 * 2), child: const Icon(Icons.public, size: 82, color: Colors.white));
+        // v10.1.3 (model 53): while connecting the button IS the
+        // sun — no icon on it, just the warm sun disc.
+        return const SizedBox.shrink(key: ValueKey(1));
       default:
         return const Icon(Icons.power_settings_new_rounded, key: ValueKey(0), size: 80, color: Colors.white70);
     }
@@ -1183,12 +1196,12 @@ class _PBState extends State<PowerButton> with TickerProviderStateMixin {
     return GestureDetector(
       onTap: widget.onTap,
       child: SizedBox(
-        width: 280,
-        height: 280,
+        width: 320,
+        height: 320,
         child: AnimatedBuilder(
           animation: c,
           builder: (_, __) => CustomPaint(
-            painter: _Rings(c.value, col, st),
+            painter: _Rings(_cycles + c.value, col, st),
             child: Center(
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 350),
@@ -1198,9 +1211,13 @@ class _PBState extends State<PowerButton> with TickerProviderStateMixin {
                   shape: BoxShape.circle,
                   gradient: st == 2
                       ? const LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [Color(0xFF3BE88C), Color(0xFF0E9F5F)])
-                      : RadialGradient(colors: [col.withOpacity(.24), col.withOpacity(.06)]),
-                  border: Border.all(color: col.withOpacity(st == 2 ? 0 : .8), width: 3),
-                  boxShadow: [BoxShadow(color: col.withOpacity(st == 0 ? .25 : .5), blurRadius: st == 0 ? 24 : 48, spreadRadius: st == 2 ? 6 : 0)],
+                      : (st == 1
+                          // v10.1.3 (model 53): the connecting
+                          // button is the sun — warm realistic disc.
+                          ? const RadialGradient(center: Alignment(-0.25, -0.3), colors: [Color(0xFFFFFBEB), Color(0xFFFDE68A), Color(0xFFF59E0B), Color(0xFFEA580C)], stops: [0, .45, .8, 1])
+                          : RadialGradient(colors: [col.withOpacity(.24), col.withOpacity(.06)])),
+                  border: Border.all(color: st == 2 ? col.withOpacity(0) : (st == 1 ? Colors.white.withOpacity(.35) : col.withOpacity(.8)), width: 3),
+                  boxShadow: [BoxShadow(color: st == 1 ? const Color(0xFFF59E0B).withOpacity(.5) : col.withOpacity(st == 0 ? .25 : .5), blurRadius: st == 0 ? 24 : 48, spreadRadius: st == 2 ? 6 : 0)],
                 ),
                 child: st == 2 && _cc != null
                     ? Stack(
@@ -1237,7 +1254,7 @@ class _PBState extends State<PowerButton> with TickerProviderStateMixin {
                     : AnimatedSwitcher(
                         duration: const Duration(milliseconds: 350),
                         transitionBuilder: (w, a) => ScaleTransition(scale: a, child: FadeTransition(opacity: a, child: w)),
-                        child: _icon(c.value),
+                        child: _icon(),
                       ),
               ),
             ),
@@ -1271,11 +1288,178 @@ class _ShinePainter extends CustomPainter {
   bool shouldRepaint(covariant _ShinePainter o) => o.v != v;
 }
 
+/// v10.1.3 (model 53): the real solar system for the connecting
+/// state. r = orbit radius (the button sun is radius 88, so the
+/// orbits start just outside it), sp = compressed orbital speed,
+/// phase = each planet's own starting angle and incl = its own
+/// orbit tilt — so the planets are scattered naturally around
+/// the system instead of starting in one row or moving in
+/// parallel lines. Sizes are scaled to the 320 px stage.
+class _SolarPlanet {
+  const _SolarPlanet(this.r, this.sp, this.phase, this.incl, this.sz, this.col, this.dcol, {this.bands = false, this.ring = false, this.moon = false});
+  final double r, sp, phase, incl, sz;
+  final Color col, dcol;
+  final bool bands, ring, moon;
+}
+
+const _solarPlanets = [
+  _SolarPlanet(98, 0.0105, 0.4, 0.28, 2.5, Color(0xFFA89F91), Color(0xFF57534E)),
+  _SolarPlanet(106, 0.0066, 2.4, -0.18, 3.5, Color(0xFFE8D5A3), Color(0xFF92400E)),
+  _SolarPlanet(114, 0.0052, 4.4, 0.05, 4.0, Color(0xFF3B82F6), Color(0xFF172554), moon: true),
+  _SolarPlanet(122, 0.0038, 1.2, 0.32, 3.2, Color(0xFFF97316), Color(0xFF7C2D12)),
+  _SolarPlanet(132, 0.0015, 3.3, -0.12, 7.5, Color(0xFFE8A87C), Color(0xFF78350F), bands: true),
+  _SolarPlanet(139, 0.00095, 5.3, 0.22, 6.0, Color(0xFFE7C987), Color(0xFF78350F), ring: true),
+  _SolarPlanet(146, 0.00056, 2.0, -0.30, 5.0, Color(0xFFA5F3FC), Color(0xFF155E75)),
+  _SolarPlanet(153, 0.00040, 4.9, 0.15, 4.5, Color(0xFF60A5FA), Color(0xFF1E3A8A)),
+];
+
 class _Rings extends CustomPainter {
   _Rings(this.v, this.color, this.state);
   final double v;
   final Color color;
   final int state;
+
+  // Project an orbit point: rotate about X by (0.30 + incl),
+  // then about Y by 0.15 — the same tilt model as the demo.
+  Offset _project(Offset ctr, double r, double incl, double a) {
+    final x0 = math.cos(a) * r;
+    final z0 = math.sin(a) * r;
+    final ax = 0.30 + incl;
+    final cx = math.cos(ax), sx = math.sin(ax);
+    final y1 = -z0 * sx;
+    final z1 = z0 * cx;
+    final cy = math.cos(0.15), sy = math.sin(0.15);
+    final x1 = x0 * cy + z1 * sy;
+    final z2 = -x0 * sy + z1 * cy;
+    final s = 1 + z2 * 0.001;
+    return Offset(ctr.dx + x1 * s, ctr.dy + y1 * s);
+  }
+
+  Offset _solarPoint(Offset ctr, _SolarPlanet p, double a) => _project(ctr, p.r, p.incl, a);
+
+  void _drawSolarPlanet(Canvas canvas, Offset ctr, Offset q, _SolarPlanet p) {
+    final r = p.sz;
+    final d = ctr - q;
+    final len = d.distance == 0 ? 1 : d.distance;
+    final ux = d.dx / len, uy = d.dy / len;
+    // Spherical shading: bright on the sun-facing side, dark limb.
+    final shader = RadialGradient(
+      colors: [Colors.white.withOpacity(.85), p.col, p.dcol],
+      stops: const [0, .3, 1],
+    ).createShader(Rect.fromCircle(center: Offset(q.dx + ux * r * 0.45, q.dy + uy * r * 0.45), radius: r));
+    canvas.drawCircle(q, r, Paint()..shader = shader);
+    if (p.bands) {
+      canvas.save();
+      canvas.clipPath(Path()..addOval(Rect.fromCircle(center: q, radius: r)));
+      canvas.drawRect(Rect.fromLTWH(q.dx - r, q.dy - r * .55, r * 2, r * .35), Paint()..color = const Color(0xFF78350F).withOpacity(.4));
+      canvas.drawRect(Rect.fromLTWH(q.dx - r, q.dy - r * .1, r * 2, r * .3), Paint()..color = const Color(0xFFFFEDD5).withOpacity(.45));
+      canvas.drawRect(Rect.fromLTWH(q.dx - r, q.dy + r * .3, r * 2, r * .35), Paint()..color = const Color(0xFF78350F).withOpacity(.4));
+      canvas.restore();
+    }
+    if (p.moon) {
+      // Earth only: green/brown continents.
+      canvas.save();
+      canvas.clipPath(Path()..addOval(Rect.fromCircle(center: q, radius: r)));
+      canvas.drawOval(Rect.fromCenter(center: Offset(q.dx - r * .3, q.dy - r * .2), width: r * .7, height: r * .5), Paint()..color = const Color(0xFF22C55E).withOpacity(.75));
+      canvas.drawOval(Rect.fromCenter(center: Offset(q.dx + r * .35, q.dy + r * .3), width: r * .6, height: r * .44), Paint()..color = const Color(0xFFA16207).withOpacity(.55));
+      canvas.restore();
+    }
+    if (p.ring) {
+      canvas.save();
+      canvas.translate(q.dx, q.dy);
+      canvas.rotate(-0.35);
+      canvas.drawOval(Rect.fromCenter(center: Offset.zero, width: r * 3.8, height: r * 1.1), Paint()..style = PaintingStyle.stroke..strokeWidth = 1.5..color = const Color(0xFFFDE68A).withOpacity(.85));
+      canvas.drawOval(Rect.fromCenter(center: Offset.zero, width: r * 2.9, height: r * 0.84), Paint()..style = PaintingStyle.stroke..strokeWidth = 1..color = const Color(0xFFFDE68A).withOpacity(.45));
+      canvas.restore();
+    }
+  }
+
+  /// The connecting-state solar system. [cycles] is continuous
+  /// time in 2.4 s units (see _PBState._trackCycles); the reticle
+  /// cycle is derived purely from time, so it needs no state:
+  /// 1.6 s per planet (travel, then a green lock) and a gold
+  /// full-system pulse after the 8th planet, looping until
+  /// connected. Nothing here paints a background — the painter
+  /// sits behind the button, so the scene floats on the app.
+  void _paintSolar(Canvas canvas, Offset ctr, double cycles) {
+    final sec = cycles * 2.4;
+    // Twinkling starfield (deterministic positions, no flicker).
+    for (var i = 0; i < 60; i++) {
+      final sx = (i * 137.508) % 320;
+      final sy = (i * 197.3) % 320;
+      final tw = 0.25 + 0.3 * (0.5 + 0.5 * math.sin(sec * 1.2 + i));
+      canvas.drawCircle(Offset(sx, sy), 0.5 + (i % 3) * 0.5, Paint()..color = Colors.white.withOpacity(tw));
+    }
+    // Faint orbit paths (each tilted differently).
+    final orbitPaint = Paint()..style = PaintingStyle.stroke..strokeWidth = 1..color = Colors.white.withOpacity(.12);
+    for (final p in _solarPlanets) {
+      final path = Path();
+      for (var k = 0; k <= 72; k++) {
+        final q = _solarPoint(ctr, p, k / 72 * math.pi * 2);
+        if (k == 0) {
+          path.moveTo(q.dx, q.dy);
+        } else {
+          path.lineTo(q.dx, q.dy);
+        }
+      }
+      canvas.drawPath(path, orbitPaint);
+    }
+    // Asteroid belt between Mars and Jupiter.
+    for (var i = 0; i < 60; i++) {
+      final q = _project(ctr, 127 + (i % 5), 0.1, i * 2.39996 + sec * 0.15);
+      canvas.drawCircle(q, 0.8 + (i % 3) * 0.4, Paint()..color = const Color(0xFFCBD5E1).withOpacity(.55));
+    }
+    // Planets.
+    final pos = <Offset>[];
+    for (final p in _solarPlanets) {
+      final q = _solarPoint(ctr, p, p.phase + sec * p.sp * 60);
+      pos.add(q);
+      _drawSolarPlanet(canvas, ctr, q, p);
+      if (p.moon) {
+        final ma = sec * 0.9;
+        canvas.drawCircle(Offset(q.dx + math.cos(ma) * 10, q.dy + math.sin(ma) * 10 * 0.6), 1.8, Paint()..color = const Color(0xFFE2E8F0));
+      }
+    }
+    // Targeting reticle: cycles all 8 planets, then pulses.
+    const per = 1.6;
+    const total = 8 * per + 1.2;
+    final ct = sec % total;
+    if (ct < 8 * per) {
+      final idx = ct ~/ per;
+      final local = ct % per;
+      final locked = local >= 0.9;
+      final trav = locked ? 1.0 : local / 0.9;
+      final ease = trav * trav * (3 - 2 * trav);
+      final prev = pos[(idx + 7) % 8];
+      final cur = pos[idx];
+      final rx = prev.dx + (cur.dx - prev.dx) * ease;
+      final ry = prev.dy + (cur.dy - prev.dy) * ease;
+      final col = locked ? const Color(0xFF4ADE80) : const Color(0xFFFBBF24);
+      canvas.drawCircle(Offset(rx, ry), 11, Paint()..style = PaintingStyle.stroke..strokeWidth = 1.6..color = col);
+      const b = 6.0, l = 5.0;
+      final corners = Path()
+        ..moveTo(rx - b - l, ry - b)
+        ..lineTo(rx - b, ry - b)
+        ..lineTo(rx - b, ry - b - l)
+        ..moveTo(rx + b + l, ry - b)
+        ..lineTo(rx + b, ry - b)
+        ..lineTo(rx + b, ry - b - l)
+        ..moveTo(rx - b - l, ry + b)
+        ..lineTo(rx - b, ry + b)
+        ..lineTo(rx - b, ry + b + l)
+        ..moveTo(rx + b + l, ry + b)
+        ..lineTo(rx + b, ry + b)
+        ..lineTo(rx + b, ry + b + l);
+      canvas.drawPath(corners, Paint()..style = PaintingStyle.stroke..strokeWidth = 2..color = col);
+      if (locked) {
+        final lp = (local - 0.9) / 0.7;
+        canvas.drawCircle(cur, 12 + lp * 12, Paint()..style = PaintingStyle.stroke..strokeWidth = 2..color = const Color(0xFF4ADE80).withOpacity((1 - lp) * .8));
+      }
+    } else {
+      final p = (ct - 8 * per) / 1.2;
+      canvas.drawCircle(ctr, 88 + p * 72, Paint()..style = PaintingStyle.stroke..strokeWidth = 2..color = const Color(0xFFFDE68A).withOpacity(1 - p));
+    }
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1284,15 +1468,11 @@ class _Rings extends CustomPainter {
     if (state == 0) {
       canvas.drawCircle(ctr, 104 + 4 * math.sin(v * 6.2832), line..strokeWidth = 1.5..color = color.withOpacity(.35));
     } else if (state == 1) {
-      final rect = Rect.fromCircle(center: ctr, radius: 112);
-      canvas.drawCircle(ctr, 112, Paint()..shader = SweepGradient(colors: [color.withOpacity(0), color.withOpacity(.5)], transform: GradientRotation(v * 6.2832)).createShader(rect));
-      canvas.drawCircle(ctr, 112, line..strokeWidth = 1.5..color = color.withOpacity(.5));
-      for (var k = 0; k < 3; k++) {
-        final ang = v * 6.2832 * (1 + k * .5) + k * 2.1;
-        canvas.drawCircle(ctr + Offset((124.0 + k * 4) * math.cos(ang), (124.0 + k * 4) * math.sin(ang)), 5.0 - k, Paint()..color = color);
-      }
-      final t = (v * 1.5) % 1;
-      canvas.drawCircle(ctr, 100 + t * 36, Paint()..style = PaintingStyle.stroke..strokeWidth = 2..color = color.withOpacity((1 - t) * .5));
+      // v10.1.3 (model 53): the realistic solar system replaces
+      // the old sweep arc + orbiting dots. The button itself is
+      // the sun (see _PBState); the painter draws only what
+      // orbits around it — transparent, no background fill.
+      _paintSolar(canvas, ctr, v);
     } else {
       for (var i = 0; i < 3; i++) {
         final t = (v + i / 3) % 1;
