@@ -67,10 +67,18 @@ const _countries = {
 /// Finds a country code in the user's message, if any. Flags
 /// match directly; short codes only as whole words, so 'us'
 /// never matches a word like 'russia' in free text.
-String? _countryIn(String q) {
+String? countryIn(String q) {
   final low = q.toLowerCase();
   for (final e in _countries.entries) {
     if (q.contains(e.value.first)) return e.key; // the flag
+    // Bare 2-letter codes as whole words ("a US server") — this
+    // was the v1.0.10 bug: "Connect me to a US server" matched
+    // NO country (the list only has 'usa'/'america'), so the
+    // action connected the fastest server of ANY country.
+    // 'in'/'it' stay excluded: they are everyday English words.
+    if (e.key.length == 2 && !{'in', 'it'}.contains(e.key)) {
+      if (RegExp('\\b${e.key}\\b').hasMatch(low)) return e.key;
+    }
     for (final token in e.value.skip(1)) {
       if (token.length == 2) {
         if (RegExp('\\b$token\\b').hasMatch(low)) return e.key;
@@ -80,6 +88,35 @@ String? _countryIn(String q) {
     }
   }
   return null;
+}
+
+/// Canonical geo-service country names that are NOT in
+/// _countries (geo returns "United States", not "USA").
+const _geoExtraNames = {
+  'us': ['united states', 'united states of america'],
+  'gb': ['united kingdom', 'great britain'],
+  'de': ['deutschland'],
+  'ae': ['united arab emirates'],
+  'ru': ['russian federation'],
+};
+
+/// Does a geo location ("Falkenstein, Germany") really sit in
+/// the requested country? A remark that says "US" is not proof
+/// — free subscriptions mislabel servers — so a country connect
+/// is only a success when the exit IP's country matches. The
+/// country is the part after the comma when there is one.
+bool geoMatches(String location, String code) {
+  final low = location.toLowerCase();
+  final names = _countries[code];
+  if (names == null) return false;
+  final parts = low.split(',');
+  final countryPart = parts.length > 1 ? parts.last.trim() : low.trim();
+  final candidates = <String>{
+    code,
+    ...names.sublist(1).where((n) => RegExp(r'^[a-z ]+$').hasMatch(n)),
+    ...(_geoExtraNames[code] ?? []),
+  };
+  return candidates.any((n) => countryPart == n || countryPart.contains(n));
 }
 
 bool _remarkMatchesCountry(String remark, String code) {
@@ -113,9 +150,15 @@ class _Msg {
 /// One saved conversation for the history sidebar.
 class _Chat {
   final String id;
-  final String title;
+  // Mutable: the user can rename a chat, or pin it to the top.
+  String title;
+  bool pinned;
   final List<_Msg> msgs;
-  _Chat({required this.id, required this.title, required this.msgs});
+  _Chat(
+      {required this.id,
+      required this.title,
+      required this.msgs,
+      this.pinned = false});
 }
 
 /// True when the text is written in Persian/Arabic script — used
@@ -144,7 +187,7 @@ String _fmtTime(DateTime t) =>
 /// Display name for a country code, in the chat's language:
 /// the longest Latin name for English ("America"), the last
 /// (Persian) name for Persian ("آمریکا").
-String _countryName(String code, bool fa) {
+String countryName(String code, bool fa) {
   final names = _countries[code];
   if (names == null || names.length < 2) return code.toUpperCase();
   if (fa) return names.last;
@@ -164,7 +207,7 @@ String _countryName(String code, bool fa) {
 /// a category ("Connection failure"), not the message itself
 /// ("hi why won't it connect?"), so the sidebar stays
 /// scannable days later.
-String _smartTitle(String q, bool fa) {
+String smartTitle(String q, bool fa) {
   final low = q.toLowerCase();
   String pick(String en, String faTitle) => fa ? faTitle : en;
   if (q.contains('قطع') ||
@@ -172,29 +215,43 @@ String _smartTitle(String q, bool fa) {
       low.contains('drop')) {
     return pick('Connection drops', 'قطع شدن اتصال');
   }
+  // Persian spelling varies (نمی‌شه / نمیشه / نمی شه), so
+  // all three forms must count as a connection failure.
   if (q.contains('وصل نمی‌شه') ||
+      q.contains('وصل نمیشه') ||
+      q.contains('وصل نمی شه') ||
       q.contains('متصل نمی‌شه') ||
+      q.contains('متصل نمیشه') ||
+      q.contains('متصل نمی شه') ||
       low.contains("won't connect") ||
       low.contains('cannot connect') ||
       low.contains("can't connect") ||
       low.contains('not connecting')) {
     return pick('Connection failure', 'رفع مشکل وصل نشدن');
   }
+  // Speed before connect: "Why is my connection slow?"
+  // contains "connect" as a substring but is about speed —
+  // unless it is a real connect command ("وصل کن" / connect
+  // as its own word), which stays a connect title.
+  final isConnectCommand = q.contains('وصل کن') ||
+      q.contains('متصل کن') ||
+      RegExp(r'\bconnect\b').hasMatch(low);
+  if (!isConnectCommand &&
+      (q.contains('سرعت') ||
+          q.contains('کند') ||
+          q.contains('پینگ') ||
+          low.contains('speed') ||
+          low.contains('slow') ||
+          low.contains('ping'))) {
+    return pick('Connection speed', 'سرعت اتصال');
+  }
   if (q.contains('وصل') || q.contains('متصل') || low.contains('connect')) {
-    final code = _countryIn(q);
+    final code = countryIn(q);
     if (code != null) {
-      final name = _countryName(code, fa);
+      final name = countryName(code, fa);
       return fa ? 'اتصال به $name' : 'Connect to $name';
     }
     return pick('Connect to a server', 'اتصال به سرور');
-  }
-  if (q.contains('سرعت') ||
-      q.contains('کند') ||
-      q.contains('پینگ') ||
-      low.contains('speed') ||
-      low.contains('slow') ||
-      low.contains('ping')) {
-    return pick('Connection speed', 'سرعت اتصال');
   }
   if (q.contains('لاگ') || low.contains('log')) {
     return pick('Log explanations', 'توضیح لاگ‌ها');
@@ -225,13 +282,18 @@ class _Action {
   // "disconnect and connect to X": stop the current tunnel
   // first, then connect — one message, one sequence.
   final bool disconnectFirst;
+  // Ordered connect candidates (best first) for the
+  // country-verified loop: a failed or wrong-country server
+  // falls through to the next one instead of giving up.
+  final List<String>? candidates;
   const _Action(this.kind,
       {this.link,
       this.remark,
       this.message,
       this.mode,
       this.country,
-      this.disconnectFirst = false});
+      this.disconnectFirst = false,
+      this.candidates});
 }
 
 /// Direct answer from measured state, no AI call: "what
@@ -371,11 +433,13 @@ _Action? _actionFor(Store s, String q) {
   final hasDisconnect = RegExp(r'قطع(ش| اتصال)? کن').hasMatch(q) ||
       RegExp(r'\bdisconnect\b').hasMatch(low);
   final psiWord = q.contains('سایفون') || low.contains('psiphon');
-  final code = _countryIn(q);
+  final code = countryIn(q);
   // "به سرور آمریکا سایفون وصل کن": Psiphon to that country,
   // not a Personal config — a mode switch alone never connects.
-  if (psiWord && code != null && wantsConnect) {
-    return _Action(_ActionKind.psiphon, country: code);
+  // Without a country ("به سایفون وصل کن"), Psiphon to the
+  // configured region (or any region when that is empty).
+  if (psiWord && wantsConnect) {
+    return _Action(_ActionKind.psiphon, country: code ?? s.psiCountry);
   }
   // "قطع کن و به X وصل کن": one sequence, not just a
   // disconnect — the connect below carries disconnectFirst.
@@ -402,49 +466,78 @@ _Action? _actionFor(Store s, String q) {
     }
   }
   if (!wantsConnect && !wantsFind) return null;
-  final tested = <MapEntry<String, int>>[];
-  final untested = <String>[];
+  // Candidates: Fast and AI providers first (they connect most
+  // reliably), measured pings before untested links, and servers
+  // already known to carry no traffic last — so a retry
+  // naturally tries someone else instead of the same dead one.
+  const preferredProviders = {'fast', 'ai'};
+  final tested = <_Cand>[];
+  final untested = <_Cand>[];
   for (final b in s.buildBundles()) {
     for (final l in b.links) {
       if (code != null && !_remarkMatchesCountry(_remarkOf(l), code)) {
         continue;
       }
+      final stale = s.trafficFailed.contains(l);
       final ms = s.pings[l];
       if (ms != null && ms > 0) {
-        tested.add(MapEntry(l, ms));
+        tested.add(_Cand(l, b.id, stale, ms));
       } else {
-        untested.add(l);
+        untested.add(_Cand(l, b.id, stale));
       }
     }
   }
-  tested.sort((a, b) => a.value.compareTo(b.value));
+  int candCmp(_Cand a, _Cand b) {
+    final pa = preferredProviders.contains(a.provider) ? 0 : 1;
+    final pb = preferredProviders.contains(b.provider) ? 0 : 1;
+    if (pa != pb) return pa - pb;
+    if (a.stale != b.stale) return a.stale ? 1 : -1;
+    return (a.ms ?? 1 << 30).compareTo(b.ms ?? 1 << 30);
+  }
+
+  tested.sort(candCmp);
+  untested.sort(candCmp);
   if (wantsConnect) {
-    final link =
-        tested.isNotEmpty ? tested.first.key : (untested.isNotEmpty ? untested.first : null);
-    if (link == null) {
+    final ordered = [...tested, ...untested];
+    if (ordered.isEmpty) {
       return _Action(_ActionKind.find, message: s.tLang('ainofound', fa));
     }
+    final first = ordered.first;
     return _Action(_ActionKind.connect,
-        link: link, remark: _remarkOf(link), disconnectFirst: hasDisconnect);
+        link: first.link,
+        remark: _remarkOf(first.link),
+        country: code,
+        disconnectFirst: hasDisconnect,
+        candidates: ordered.take(4).map((c) => c.link).toList());
   }
   if (tested.isEmpty && untested.isEmpty) {
     return _Action(_ActionKind.find, message: s.tLang('ainofound', fa));
   }
   final lines = <String>[];
   for (final t in tested.take(3)) {
-    lines.add('• ${_remarkOf(t.key)} — ${t.value} ms');
+    lines.add('• ${_remarkOf(t.link)} — ${t.ms} ms');
   }
   for (final l in untested.take(3 - lines.length)) {
-    lines.add('• ${_remarkOf(l)}');
+    lines.add('• ${_remarkOf(l.link)}');
   }
   return _Action(_ActionKind.find, message: '${s.tLang('aifound', fa)}\n${lines.join('\n')}');
 }
 
+/// One connect candidate: its link, its provider, whether it
+/// already proved it carries no traffic, and its measured ping.
+class _Cand {
+  final String link, provider;
+  final bool stale;
+  final int? ms;
+  const _Cand(this.link, this.provider, this.stale, [this.ms]);
+}
+
 /// Ready questions: the ones users actually ask first. Tapping one
 /// sends it as the user's message.
-/// Icons for the ready questions, in the same order: connect,
-/// drop, best server, share, logs, CDN, Psiphon, tools.
-const _qIcons = [Icons.public, Icons.link_off, Icons.wifi_off, Icons.star, Icons.share, Icons.bug_report, Icons.dns, Icons.shield, Icons.build];
+/// Icons for the ready questions, in the same order: US
+/// connect, drop, UK connect, best server, share, logs, CDN,
+/// Psiphon, tools.
+const _qIcons = [Icons.public, Icons.link_off, Icons.wifi_off, Icons.flag, Icons.star, Icons.share, Icons.bug_report, Icons.dns, Icons.shield, Icons.build];
 
 const _readyQuestions = [
   // First: the one users actually ask for most — and it IS an
@@ -453,6 +546,9 @@ const _readyQuestions = [
   ['Connect me to a US server', 'منو به یه سرور آمریکا وصل کن'],
   ['Why won\'t it connect?', 'چرا وصل نمی‌شه؟'],
   ['Why does my connection drop?', 'چرا اتصالم قطع می‌شه؟'],
+  // UK connect sits in the middle, not first, as asked — same
+  // verified-country action as the US one.
+  ['Connect me to a UK server', 'منو به یه سرور انگلیس وصل کن'],
   ['Which server is best for me?', 'کدوم سرور برای من بهتره؟'],
   ['How does Share VPN work?', 'اشتراک‌گذاری VPN چطور کار می‌کنه؟'],
   ['What do the logs mean?', 'لاگ‌ها یعنی چی؟'],
@@ -513,7 +609,7 @@ String _snapshot(Store s) {
 }
 
 String _systemPrompt(Store s, bool fa) => '''
-You are the in-app assistant for V2rayAG, an Android VPN app (Xray core + Psiphon). Answer ONLY about this app and its features, in ${fa ? 'natural, human Persian' : 'English'}. Keep answers short and practical; give steps when the user asks how.
+You are the in-app assistant for V2rayAG, an Android VPN app (Xray core + Psiphon). Answer ONLY about this app and its features, in ${fa ? 'natural, human Persian' : 'English'}. Always write the app name in Latin letters exactly as V2rayAG — never transliterate it into Persian script (never وی‌توری‌ای‌جی or anything like it). Your memory (this conversation), your tasks and your real actions are shared across every provider and model the user picks: switching models never resets what you know or what you can do. Keep answers short and practical; give steps when the user asks how.
 Never invent a server status. Never claim a server works without a real traffic test: a ping only proves the endpoint answers, and "Connected" in this app means real traffic passed, not just a ping. Never ask for, repeat, or output API keys, passwords, subscription URLs, or full config links. If the user attached a log, explain only what they ask about, in plain words, and say what to try next.
 App facts: modes: Smart (providers, then CDN, then Psiphon until one carries real traffic), Automatic (provider pool), CDN Fronting (clean IP + front host from Tools), Personal (own servers/subs), Psiphon (independent emergency transport). Refresh rules: providers refresh once on first install, then every 12h, except Fast (first time, its row arrow, or Update all only; ticking never refreshes). Geo IP/location fills in the background after connect and never blocks Connected. Tools: IP scanner (finds clean IPs), Host/SNI finder (tests which hosts work as a fronting SNI on the user's operator; only hosts that answer Cloudflare pass), DNS latency test, Domain checker, Vless modifier, Share VPN (sharer exposes the tunnel as a LAN SOCKS5 proxy in Proxy mode or Psiphon mode; joiner enters sharer IP + port and connects with no subscription; hotspot clients must set the proxy because Android hotspot bypasses the sharer's VPN by default). IPv6 switch in Settings (default off) adds Xray DNS queryStrategy UseIPv6 to core modes only.
 App snapshot (measured just now): ${_snapshot(s)}
@@ -565,6 +661,10 @@ class _AiChatState extends State<AiChatPage> {
   String? pendingImageMime;
   String? remoteNote;
   bool busy = false, autoSent = false;
+  // Quote of an AI message the user is replying to: it rides
+  // in the API history only (the bubble shows just what the
+  // user typed), so replies work even on old messages.
+  String? replyQuote;
   // Live "connecting" row for a real action-connect: set when the
   // action starts, cleared only when the verdict lands.
   String? actionProgress;
@@ -647,7 +747,12 @@ class _AiChatState extends State<AiChatPage> {
             ts is int ? DateTime.fromMillisecondsSinceEpoch(ts) : null,
           ));
         }
-        savedChats.add(_Chat(id: '${m['id'] ?? ''}', title: '${m['title'] ?? ''}', msgs: ms));
+        savedChats.add(_Chat(
+          id: '${m['id'] ?? ''}',
+          title: '${m['title'] ?? ''}',
+          msgs: ms,
+          pinned: m['p'] == true,
+        ));
       }
     } catch (_) {
       savedChats.clear();
@@ -664,12 +769,15 @@ class _AiChatState extends State<AiChatPage> {
       } else {
         var snap = List.of(msgs);
         if (snap.length > 100) snap = snap.sublist(snap.length - 100);
+        final idx = savedChats.indexWhere((c) => c.id == currentChatId);
+        // The entry is rebuilt on every save, so a renamed or
+        // pinned flag must be carried over, not reset.
         final chat = _Chat(
           id: currentChatId,
           title: currentTitle.isEmpty ? widget.s.t('ainewchat') : currentTitle,
           msgs: snap,
+          pinned: idx >= 0 ? savedChats[idx].pinned : false,
         );
-        final idx = savedChats.indexWhere((c) => c.id == currentChatId);
         if (idx >= 0) {
           savedChats[idx] = chat;
         } else {
@@ -683,6 +791,7 @@ class _AiChatState extends State<AiChatPage> {
           .map((c) => {
                 'id': c.id,
                 'title': c.title,
+                if (c.pinned) 'p': true,
                 'msgs': c.msgs
                     .map((m) => {
                           'u': m.user,
@@ -725,6 +834,120 @@ class _AiChatState extends State<AiChatPage> {
         DateTime.now().millisecondsSinceEpoch.toString(), '', []));
   }
 
+  /// Renames a sidebar chat (its open title follows when the
+  /// renamed chat is the one on screen).
+  Future<void> _renameChat(_Chat c) async {
+    final s = widget.s;
+    final ctl = TextEditingController(text: c.title);
+    final next = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(s.t('airename')),
+        content: TextField(
+          controller: ctl,
+          decoration: InputDecoration(hintText: c.title),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(s.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, ctl.text.trim()),
+            child: Text(s.t('aisave')),
+          ),
+        ],
+      ),
+    );
+    if (next == null || next.isEmpty || !mounted) return;
+    setState(() {
+      c.title = next;
+      if (c.id == currentChatId) currentTitle = next;
+    });
+    _saveChats();
+  }
+
+  /// Re-runs the pipeline for a message as a NEW turn appended
+  /// at the end: a failed connect retries with the next
+  /// candidate (failed servers sort last), a model reply gets
+  /// a fresh answer. Works for old messages too — the question
+  /// text is all it needs. Blocked while busy or while a
+  /// connect is already running, so two actions never race.
+  Future<void> _retryAt(int index) async {
+    if (busy || actionProgress != null) return;
+    if (index < 0 || index >= msgs.length) return;
+    var q = '';
+    for (var j = index; j >= 0; j--) {
+      if (msgs[j].user) {
+        q = msgs[j].text;
+        break;
+      }
+    }
+    if (q.isEmpty) return;
+    final s = widget.s;
+    final fa = _replyFa(s, q);
+    setState(() => busy = true);
+    final local = _localAnswer(s, q, fa);
+    if (local != null) {
+      if (mounted) {
+        setState(() {
+          msgs.add(_m(false, local));
+          busy = false;
+        });
+        _saveChats();
+      }
+      return;
+    }
+    final action = _actionFor(s, q);
+    if (action != null) {
+      await _runAction(action, fa);
+      _saveChats();
+      return;
+    }
+    final keyOk = s.aiProvider == 'gonka'
+        ? s.gonkaReady
+        : s.aiProvider == 'custom'
+            ? s.customReady
+            : s.aiReady;
+    if (!keyOk) {
+      if (mounted) {
+        setState(() {
+          msgs.add(_m(
+              false,
+              s.aiProvider == 'gonka'
+                  ? s.tLang('gonkanokey', fa)
+                  : s.aiProvider == 'custom'
+                      ? s.tLang('customnokey', fa)
+                      : s.tLang('ainokey', fa)));
+          busy = false;
+        });
+        _saveChats();
+      }
+      return;
+    }
+    history.add({'role': 'user', 'content': q});
+    try {
+      final reply = await _chat(s, history, fa: fa);
+      if (!mounted) return;
+      setState(() {
+        msgs.add(_m(false, reply));
+        history.add({'role': 'assistant', 'content': reply});
+        busy = false;
+      });
+      _saveChats();
+    } catch (e) {
+      if (!mounted) return;
+      final detail =
+          e is TimeoutException ? 'timed out, try again' : 'network error';
+      setState(() {
+        msgs.add(_m(false, '${s.tLang('aifailed', fa)}: $detail'));
+        busy = false;
+      });
+      history.removeLast();
+      _saveChats();
+    }
+  }
+
   void _deleteChat(String id) {
     final wasCurrent = id == currentChatId;
     savedChats.removeWhere((c) => c.id == id);
@@ -750,11 +973,14 @@ class _AiChatState extends State<AiChatPage> {
     // and the sent message keeps its attachment label as a
     // caption, so a sent attachment stays visible in the chat.
     final fa = _replyFa(s, q);
+    // A reply in progress: consumed by this send, then cleared.
+    final quote = replyQuote;
+    replyQuote = null;
     final sendAttach = attachLabel ?? pendingImageName;
     if (currentTitle.isEmpty) {
       // Analytic title, not the first message itself — the
       // sidebar must stay scannable days later.
-      currentTitle = _smartTitle(q, fa);
+      currentTitle = smartTitle(q, fa);
     }
     setState(() {
       msgs.add(_m(true, q, sendAttach));
@@ -811,6 +1037,15 @@ class _AiChatState extends State<AiChatPage> {
       content = 'Attached ${attachLabel ?? 'log'}:\n```\n$att\n```\n\n$q';
       attached = null; // sent once; history keeps it for follow-ups
       attachLabel = null;
+    }
+    // A reply quotes the earlier AI message into the API
+    // history only — the bubble still shows just what the
+    // user typed, and local answers/actions still see the
+    // typed text alone.
+    if (quote != null && quote.isNotEmpty) {
+      final short =
+          quote.length > 500 ? '${quote.substring(0, 500)}…' : quote;
+      content = 'In reply to your earlier message: "$short"\n\n$content';
     }
     final img = pendingImage;
     final imgMime = pendingImageMime;
@@ -975,13 +1210,12 @@ class _AiChatState extends State<AiChatPage> {
           busy = false;
         });
       case _ActionKind.connect:
-        // A live progress row stays up until the real verdict
-        // lands, so "connecting" is never just words: the row
-        // only clears when the engine reports connected/failed
-        // or the 90s wait expires.
+        // "Connecting" is a loading row (like Thinking), NOT a
+        // chat message: it stays up while an attempt runs and
+        // vanishes when the verdict lands, leaving only the
+        // final Connected/failed message in the conversation.
         if (mounted) {
           setState(() {
-            msgs.add(_m(false, '${s.tLang('aiconnecting', fa)} ${a.remark}…'));
             actionProgress = a.remark;
             actionProgressFa = fa;
             busy = false;
@@ -997,54 +1231,93 @@ class _AiChatState extends State<AiChatPage> {
             s.psiphon.state.phase == PsiphonPhase.connected) {
           await s.disconnectAll();
         }
-        s.connectLink(a.link!);
-        try {
-          final st = await s.engine.states
-              .firstWhere(
-                (e) => e.phase == Phase.connected || e.phase == Phase.failed,
-              )
-              .timeout(const Duration(seconds: 90));
+        // Try candidates in order until one REALLY connects to
+        // the requested country: a remark that says "US" is not
+        // proof — the exit IP's country is. A server whose geo
+        // lands elsewhere is dropped and the next candidate
+        // runs; the retry button re-runs this same loop with
+        // the failed servers pushed last.
+        final tries = a.candidates ?? [a.link!];
+        var triedMismatch = false;
+        var failDetail = '';
+        for (var t = 0; t < tries.length; t++) {
+          final link = tries[t];
+          final remark = _remarkOf(link);
+          if (mounted) {
+            setState(() {
+              actionProgress = remark;
+              actionProgressFa = fa;
+            });
+          }
+          s.connectLink(link);
+          EngineState? st;
+          try {
+            st = await s.engine.states
+                .firstWhere(
+                  (e) => e.phase == Phase.connected || e.phase == Phase.failed,
+                )
+                .timeout(const Duration(seconds: 90));
+          } on TimeoutException {
+            st = null;
+          }
           if (!mounted) return;
-          final ok = st.phase == Phase.connected;
+          if (st == null || st.phase != Phase.connected) {
+            failDetail = st?.message ?? '';
+            await s.disconnectAll();
+            continue;
+          }
+          if (a.country != null && a.country!.isNotEmpty) {
+            final okGeo = await _verifyExitCountry(a.country!);
+            if (!mounted) return;
+            if (!okGeo) {
+              triedMismatch = true;
+              await s.disconnectAll();
+              continue;
+            }
+          }
+          final cur = s.engine.state;
           setState(() {
             actionProgress = null;
-            msgs.add(
-              _m(
-                false,
-                ok
-                    ? '${s.tLang('aiconnected', fa)} ${st.configName ?? a.remark}${st.delayMs == null ? '' : ' (${st.delayMs} ms)'}'
-                    : '${s.tLang('aiconnectfail', fa)} ${st.message}',
-              ),
-            );
+            msgs.add(_m(
+              false,
+              '${s.tLang('aiconnected', fa)} ${cur.configName ?? remark}${cur.delayMs == null ? '' : ' (${cur.delayMs} ms)'}',
+            ));
           });
           // Success leaves the chat for the Connected page, so
           // the user SEES the connection — after the message,
           // with a beat to read it. Failure and disconnect stay
           // in the chat, as asked.
-          if (ok) {
-            await Future.delayed(const Duration(milliseconds: 900));
-            if (mounted) {
-              Navigator.of(context).popUntil((route) => route.isFirst);
-            }
+          await Future.delayed(const Duration(milliseconds: 900));
+          if (mounted) {
+            Navigator.of(context).popUntil((route) => route.isFirst);
           }
-        } on TimeoutException {
-          if (!mounted) return;
-          setState(() {
-            actionProgress = null;
-            msgs.add(_m(false, s.tLang('aiconnectwait', fa)));
-          });
+          return;
         }
+        if (!mounted) return;
+        setState(() {
+          actionProgress = null;
+          msgs.add(_m(
+            false,
+            triedMismatch
+                ? '${s.tLang('aicountrymismatch', fa)} ${countryName(a.country!, fa)}'
+                : '${s.tLang('aiconnectfail', fa)}${failDetail.isEmpty ? '' : ' $failDetail'}',
+          ));
+        });
       case _ActionKind.psiphon:
-        // Psiphon to a country: mode + region, then the normal
-        // Psiphon connect (the tunnel reports through
-        // psiphon.state, not engine.states, so it is polled
-        // here, up to 120s — Psiphon is slow on filtered
-        // networks and must not hang the chat forever).
-        final name = _countryName(a.country!, fa);
+        // Psiphon to a country (or any region when no country
+        // was named): mode + region, then the normal Psiphon
+        // connect. The tunnel reports through psiphon.state,
+        // not engine.states, so it is polled here — and the
+        // chat reports the SETTLED result, never "check the
+        // Home tab": Psiphon is slow on filtered networks, so
+        // the progress row keeps updating with elapsed time
+        // until the tunnel connects, fails, or stops.
+        final code = a.country ?? '';
+        final name = code.isEmpty ? '' : countryName(code, fa);
+        final label = name.isEmpty ? 'Psiphon' : 'Psiphon $name';
         if (mounted) {
           setState(() {
-            msgs.add(_m(false, '${s.tLang('aiconnecting', fa)} Psiphon $name…'));
-            actionProgress = 'Psiphon $name';
+            actionProgress = label;
             actionProgressFa = fa;
             busy = false;
           });
@@ -1054,17 +1327,32 @@ class _AiChatState extends State<AiChatPage> {
           await s.disconnectAll();
         }
         s.mode = 'psiphon';
-        s.psiCountry = a.country!;
+        s.psiCountry = code;
         s.save();
         unawaited(s.connect());
+        final started = DateTime.now();
         PsiphonPhase? settled;
-        for (var i = 0; i < 120; i++) {
+        for (var i = 0;; i++) {
+          if (!mounted) return;
           final ph = s.psiphon.state.phase;
-          if (ph == PsiphonPhase.connected ||
-              ph == PsiphonPhase.failed ||
-              ph == PsiphonPhase.idle) {
+          if (ph == PsiphonPhase.connected || ph == PsiphonPhase.failed) {
             settled = ph;
             break;
+          }
+          // Idle right after starting is just "not started
+          // yet" (or a permission refusal, which sets the
+          // error): only treat it as settled once the error is
+          // set or 10s have passed without a tunnel starting.
+          if (ph == PsiphonPhase.idle &&
+              (s.psiphonVpnError.isNotEmpty || i >= 10)) {
+            settled = ph;
+            break;
+          }
+          if (i > 0 && i % 30 == 0 && mounted) {
+            final el = DateTime.now().difference(started);
+            final mm = (el.inMinutes).toString().padLeft(2, '0');
+            final ss = (el.inSeconds % 60).toString().padLeft(2, '0');
+            setState(() => actionProgress = '$label ($mm:$ss)');
           }
           await Future.delayed(const Duration(seconds: 1));
         }
@@ -1075,7 +1363,7 @@ class _AiChatState extends State<AiChatPage> {
             actionProgress = null;
             msgs.add(_m(
               false,
-              '${s.tLang('aipsiconnected', fa)} $name'
+              '${s.tLang('aipsiconnected', fa)} $label'
               '${p.exitIp == null ? '' : ' — ${p.exitIp}'}'
               '${p.location == null ? '' : ' (${p.location})'}',
             ));
@@ -1084,7 +1372,8 @@ class _AiChatState extends State<AiChatPage> {
           if (mounted) {
             Navigator.of(context).popUntil((route) => route.isFirst);
           }
-        } else if (settled == PsiphonPhase.failed) {
+        } else if (settled == PsiphonPhase.failed ||
+            s.psiphonVpnError.isNotEmpty) {
           setState(() {
             actionProgress = null;
             msgs.add(_m(
@@ -1096,10 +1385,30 @@ class _AiChatState extends State<AiChatPage> {
         } else {
           setState(() {
             actionProgress = null;
-            msgs.add(_m(false, s.tLang('aiconnectwait', fa)));
+            msgs.add(_m(false, s.tLang('aipsistopped', fa)));
           });
         }
     }
+  }
+
+  /// Waits for the background geo lookup of the current session
+  /// (up to 25s) and checks the exit location against the
+  /// requested country. Geo unavailable (no location at all)
+  /// passes: the remark match is all the evidence there is,
+  /// and a missing geo must not block every connect.
+  Future<bool> _verifyExitCountry(String code) async {
+    final s = widget.s;
+    for (var i = 0; i < 25; i++) {
+      final e = s.engine.state;
+      if (e.phase != Phase.connected) return false;
+      if (!e.geoLoading) break;
+      await Future.delayed(const Duration(seconds: 1));
+    }
+    final e = s.engine.state;
+    if (e.phase != Phase.connected) return false;
+    final loc = e.location;
+    if (loc == null || loc.isEmpty) return true;
+    return geoMatches(loc, code);
   }
 
   Future<String> _chat(Store s, List<Map<String, dynamic>> history, {int? proxyPort, required bool fa}) async {
@@ -1470,6 +1779,10 @@ class _AiChatState extends State<AiChatPage> {
               setD(() => status = s.t('aifillall'));
               return;
             }
+            // Normalize in this order: a pasted base ending in
+            // "/chat/completions/" (trailing slash) used to
+            // survive the strip and break the /models test.
+            base = base.replaceAll(RegExp(r'/+$'), '');
             if (base.endsWith('/chat/completions')) {
               base = base.substring(
                   0, base.length - '/chat/completions'.length);
@@ -1489,10 +1802,22 @@ class _AiChatState extends State<AiChatPage> {
                     await req.close().timeout(const Duration(seconds: 20));
                 final body = await res.transform(utf8.decoder).join();
                 if (res.statusCode != 200) {
+                  // Show the provider's own reason, not just the
+                  // code: a 403 for a revoked key reads very
+                  // differently from a 403 for a wrong base URL.
+                  var detail = '';
+                  try {
+                    final j = jsonDecode(body) as Map;
+                    final err = j['error'];
+                    if (err is Map && err['message'] != null) {
+                      detail = '${err['message']}';
+                    }
+                  } catch (_) {}
+                  if (detail.length > 200) detail = detail.substring(0, 200);
                   setD(() {
                     testing = false;
                     status =
-                        '${s.t('aitestfail')} (HTTP ${res.statusCode})';
+                        '${s.t('aitestfail')} (HTTP ${res.statusCode}${detail.isEmpty ? '' : ': $detail'})';
                   });
                   return;
                 }
@@ -1535,7 +1860,8 @@ class _AiChatState extends State<AiChatPage> {
             } catch (_) {
               setD(() {
                 testing = false;
-                status = '${s.t('aitestfail')}: network error';
+                status =
+                    '${s.t('aitestfail')}: network error (if this provider is filtered, connect the VPN and try again)';
               });
             }
           }
@@ -1666,29 +1992,64 @@ class _AiChatState extends State<AiChatPage> {
                           style: const TextStyle(color: Colors.grey),
                         ),
                       )
-                    : ListView.builder(
-                        itemCount: savedChats.length,
-                        itemBuilder: (_, i) {
-                          final c = savedChats[i];
-                          return ListTile(
-                            selected: c.id == currentChatId,
-                            title: Text(
-                              c.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 13),
-                            ),
-                            onTap: () {
-                              Navigator.pop(context);
-                              _switchChat(c);
-                            },
-                            trailing: IconButton(
-                              icon: const Icon(Icons.delete, size: 18),
-                              onPressed: () => _deleteChat(c.id),
-                            ),
-                          );
-                        },
-                      ),
+                    : Builder(builder: (_) {
+                        // Pinned chats first, then the rest —
+                        // display order only; savedChats itself
+                        // stays most-recent-first so reopening
+                        // still resumes the last conversation.
+                        final display = [
+                          ...savedChats.where((c) => c.pinned),
+                          ...savedChats.where((c) => !c.pinned),
+                        ];
+                        return ListView.builder(
+                          itemCount: display.length,
+                          itemBuilder: (_, i) {
+                            final c = display[i];
+                            return ListTile(
+                              selected: c.id == currentChatId,
+                              title: Text(
+                                c.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                              onTap: () {
+                                Navigator.pop(context);
+                                _switchChat(c);
+                              },
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    icon: Icon(
+                                      Icons.push_pin,
+                                      size: 18,
+                                      color: c.pinned
+                                          ? Theme.of(context).colorScheme.primary
+                                          : Colors.grey,
+                                    ),
+                                    tooltip: c.pinned ? s.t('aiunpin') : s.t('aipin'),
+                                    onPressed: () {
+                                      c.pinned = !c.pinned;
+                                      _saveChats();
+                                      setState(() {});
+                                    },
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.edit, size: 18),
+                                    tooltip: s.t('airename'),
+                                    onPressed: () => _renameChat(c),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.delete, size: 18),
+                                    onPressed: () => _deleteChat(c.id),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        );
+                      }),
               ),
             ],
           ),
@@ -1920,6 +2281,33 @@ class _AiChatState extends State<AiChatPage> {
                                     }
                                   },
                                 ),
+                                // Retry: a fresh answer (or the
+                                // next server) for the same
+                                // question, even on old messages.
+                                IconButton(
+                                  icon: const Icon(Icons.refresh, size: 16),
+                                  tooltip: s.t('airetry'),
+                                  padding: const EdgeInsets.all(4),
+                                  constraints: const BoxConstraints(),
+                                  onPressed: (busy || actionProgress != null)
+                                      ? null
+                                      : () => _retryAt(i),
+                                ),
+                                // Reply: quote this answer into
+                                // the next send, so the follow-up
+                                // stays on this message's topic.
+                                IconButton(
+                                  icon: const Icon(Icons.reply, size: 16),
+                                  tooltip: s.t('aireply'),
+                                  padding: const EdgeInsets.all(4),
+                                  constraints: const BoxConstraints(),
+                                  onPressed: () => setState(() {
+                                    final t = m.text;
+                                    replyQuote = t.length > 500
+                                        ? '${t.substring(0, 500)}…'
+                                        : t;
+                                  }),
+                                ),
                                 if (m.time != null)
                                   Text(
                                     _fmtTime(m.time!),
@@ -1983,6 +2371,17 @@ class _AiChatState extends State<AiChatPage> {
                             ],
                           ),
                         ),
+                      // Retry on user messages too: resend the
+                      // same question for a fresh answer.
+                      IconButton(
+                        icon: const Icon(Icons.refresh, size: 16),
+                        tooltip: s.t('airetry'),
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(),
+                        onPressed: (busy || actionProgress != null)
+                            ? null
+                            : () => _retryAt(i),
+                      ),
                     ],
                   ),
                 );
@@ -2036,6 +2435,30 @@ class _AiChatState extends State<AiChatPage> {
               },
             ),
           ),
+          // Reply bar: what the next message answers, with a
+          // cancel ×. The quote rides in the API history only.
+          if (replyQuote != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+              child: Row(children: [
+                const Icon(Icons.reply, size: 16, color: Colors.grey),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '${s.t('aireplying')}: ${replyQuote!.length > 80 ? '${replyQuote!.substring(0, 80)}…' : replyQuote!}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 16),
+                  padding: const EdgeInsets.all(4),
+                  constraints: const BoxConstraints(),
+                  onPressed: () => setState(() => replyQuote = null),
+                ),
+              ]),
+            ),
           Padding(
             padding: const EdgeInsets.all(12),
             child: Row(children: [
