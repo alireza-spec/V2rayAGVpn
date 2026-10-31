@@ -101,8 +101,15 @@ class _ShareState extends State<ShareVpnPage> {
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text('${s.t('sharevia')} ${relay.targetSource}', style: const TextStyle(fontWeight: FontWeight.w800)),
                     const SizedBox(height: 8),
+                    // Say it outright: these lines ARE the Share IP.
+                    // The old card only said "Sharing via", so a user
+                    // could not tell what to give the other phone.
+                    Text(s.t('shareaddr_h'), style: const TextStyle(fontSize: 13)),
+                    const SizedBox(height: 6),
                     for (final ip in relay.lanIps) Text('SOCKS5 $ip:${relay.port}', style: const TextStyle(fontWeight: FontWeight.w700)),
                     if (relay.lanIps.isEmpty) Text('SOCKS5 127.0.0.1:${relay.port} (${s.t('sharevia')} ${relay.targetSource})'),
+                    const SizedBox(height: 4),
+                    Text(s.t('shareaddr_n'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
                     const SizedBox(height: 4),
                     Text('${relay.connections} connections so far', style: const TextStyle(color: Colors.grey, fontSize: 12)),
                     const SizedBox(height: 8),
@@ -169,7 +176,7 @@ class _ShareState extends State<ShareVpnPage> {
             const SizedBox(height: 4),
             Text(s.t('sharejoin_d'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
             const SizedBox(height: 12),
-            TextField(controller: hostCtl, decoration: InputDecoration(labelText: s.t('sharehost'), border: const OutlineInputBorder(), hintText: '192.168.43.1')),
+            TextField(controller: hostCtl, decoration: InputDecoration(labelText: s.t('sharehost'), border: const OutlineInputBorder(), hintText: '192.168.43.1', helperText: s.t('sharehost_h'), helperMaxLines: 3)),
             const SizedBox(height: 10),
             TextField(controller: joinPortCtl, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: s.t('shareport'), border: const OutlineInputBorder())),
             const SizedBox(height: 10),
