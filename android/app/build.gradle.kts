@@ -34,11 +34,38 @@ android {
         versionName = flutter.versionName
     }
 
+    // v10.1.2: a stable release keystore, so releases update
+    // over each other instead of failing with "package
+    // conflicts". The keystore itself lives only in the repo's
+    // GitHub secrets (KEYSTORE_BASE64); CI decodes it and
+    // passes its path + passwords through the environment.
+    // Local builds without those variables keep the old
+    // debug-signing fallback, so `flutter run --release`
+    // still works on a dev machine.
+    signingConfigs {
+        create("release") {
+            val ksFile = System.getenv("KEYSTORE_FILE")
+            if (ksFile != null) {
+                storeFile = file(ksFile)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+                storeType = "PKCS12"
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            if (System.getenv("V2RAYAG_RELEASE_SIGNING") == "true") {
+                val ksFile = System.getenv("KEYSTORE_FILE")
+                if (ksFile == null || !file(ksFile).exists()) {
+                    throw org.gradle.api.GradleException("V2RAYAG_RELEASE_SIGNING=true but the release keystore is missing — refusing to ship a debug-signed release")
+                }
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                signingConfig = signingConfigs.getByName("debug")
+            }
         }
     }
 }
