@@ -24,7 +24,7 @@ const kBuildNum = String.fromEnvironment('BUILD_NUM', defaultValue: '0');
 // number. Keep in sync with pubspec.yaml's version (the part
 // before the +build number). kBuildNum above stays for the
 // in-app update check's digit comparison only.
-const kAppVersion = '10.1.1';
+const kAppVersion = '10.1.2';
 
 const _tr = <String, List<String>>{
   'home': ['Home', 'خانه'],
@@ -1219,17 +1219,31 @@ class Store extends ChangeNotifier {
       if (psiMode == 'proxy' && psiProxyCustom && upstream.isEmpty) {
         log('Psiphon: custom proxy IP/port invalid, using the local proxy');
       }
-      await psiphon.configure(egressRegion: psiCountry, upstreamProxy: upstream);
-      await psiphon.connect();
-      if (psiMode != 'proxy') {
+      // v10.1.2: one store-level retry for a first attempt that
+      // fails without ever connecting. The engine already spends
+      // its own 3 re-dials inside one connect(); when those are
+      // spent and the phase still settles failed, a fresh
+      // connect() (which resets the engine budget) usually lands
+      // where the user previously had to tap connect a second
+      // time by hand. Never after a manual disconnect (token
+      // guard), never once connected.
+      for (var attempt = 0; attempt < 2; attempt++) {
+        await psiphon.configure(egressRegion: psiCountry, upstreamProxy: upstream);
+        await psiphon.connect();
+        if (psiMode == 'proxy') return;
         // Wait for the tunnel itself (no artificial timeout: Psiphon can
         // take minutes on a filtered network), then layer VPN/combo on top.
         final token = _connectToken;
         while (token == _connectToken && psiphon.state.phase == PsiphonPhase.connecting) {
           await Future.delayed(const Duration(seconds: 1));
         }
-        if (token == _connectToken && psiphon.state.phase == PsiphonPhase.connected) {
+        if (token != _connectToken) return;
+        if (psiphon.state.phase == PsiphonPhase.connected) {
           await _applyPsiphonLayer();
+          return;
+        }
+        if (attempt == 0) {
+          log('Psiphon: first attempt failed, retrying automatically (store-level 2/2)');
         }
       }
       return;
@@ -1651,6 +1665,36 @@ class Store extends ChangeNotifier {
     return out;
   }
 
+  /// v10.1.2: every provider's configs, enabled or not, each link
+  /// once (first provider in providerOrder wins). The AI chat
+  /// connects through this, not buildBundles: an explicit "connect
+  /// me to X" must search Fast, AI and the rest even when the
+  /// Home panel has some unticked — the old chat pool came only
+  /// from enabled providers and stranded on one core-rejected
+  /// config while thousands of provider configs went untried.
+  List<ProviderBundle> allBundles() {
+    final out = <ProviderBundle>[];
+    final seen = <String>{};
+    for (final id in providerOrder) {
+      final p = providerById(id);
+      final links = <String>[];
+      if (id == 'unlimited') {
+        for (final l in unlimitedEmbedded) {
+          if (seen.add(l)) links.add(l);
+        }
+      }
+      for (final src in p.sources) {
+        final c = srcCache[src.url];
+        if (c == null) continue;
+        for (final l in (c['links'] as List)) {
+          if (seen.add(l as String)) links.add(l);
+        }
+      }
+      if (links.isNotEmpty) out.add(ProviderBundle(p.id, p.name, links));
+    }
+    return out;
+  }
+
   Future<void> _prepare() async {
     final e = engine;
     var blocked = bypass.split(RegExp(r'[\s,]+')).where((x) => x.contains('.')).toList();
@@ -1984,6 +2028,23 @@ class Store extends ChangeNotifier {
     save();
     go(0);
     connect();
+  }
+
+  /// v10.1.2: AI-chat Automatic connect. Runs the Automatic engine
+  /// flow over caller-supplied bundles (already country-filtered,
+  /// ordered and deduped) and returns true only when the engine
+  /// ends connected. Unlike connectLink this never flips the Home
+  /// tab to Personal: the mode stays Automatic, and the engine —
+  /// not a chat-side probe filter — tests the pool (its probe
+  /// still attempts configs the handshake probe could not reach)
+  /// and tries providers in order with priority handling.
+  Future<bool> connectAutoBundles(List<ProviderBundle> bundles) async {
+    mode = 'auto';
+    save();
+    engine.announce(t('connecting'));
+    await _prepare();
+    await engine.connectOrdered(bundles, refetch: () async => bundles);
+    return engine.state.phase == Phase.connected;
   }
 
   void connectSub(String u) {
