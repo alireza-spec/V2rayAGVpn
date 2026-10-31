@@ -19,6 +19,13 @@ import '../engine/vpn_core.dart';
 
 const kBuildNum = String.fromEnvironment('BUILD_NUM', defaultValue: '0');
 
+// v10.1.1: the version shown in the app (About dialog + footer).
+// Shown as the version itself ("10.1.1"), never as a build
+// number. Keep in sync with pubspec.yaml's version (the part
+// before the +build number). kBuildNum above stays for the
+// in-app update check's digit comparison only.
+const kAppVersion = '10.1.1';
+
 const _tr = <String, List<String>>{
   'home': ['Home', 'خانه'],
   'servers': ['Servers', 'سرورها'],
@@ -351,6 +358,14 @@ const _tr = <String, List<String>>{
   'aiwhere': ['You are connected to', 'شما به این وصل هستید'],
   'ainotconn': ['You are not connected.', 'شما وصل نیستید.'],
   'aiconnecting': ['Connecting you to', 'در حال اتصال شما به'],
+  'aitesting': ['Testing servers', 'در حال تست سرورها'],
+  'aicancelled': ['Cancelled.', 'لغو شد.'],
+  'ainopass': ['No server passed the test. Try Update all in the Providers tab, then ask again.', 'هیچ سروری تست را رد نکرد. اول در تب پروایدرها «به‌روزرسانی همه» را بزنید، بعد دوباره بپرسید.'],
+  'aipingtraffic': ['Ping & traffic', 'پینگ و ترافیک'],
+  'aifavadded': ['Added to favorites.', 'به علاقه‌مندی‌ها اضافه شد.'],
+  'aifavremoved': ['Removed from favorites.', 'از علاقه‌مندی‌ها حذف شد.'],
+  'aideleteconfirm': ['Delete this chat?', 'این گفتگو حذف شود؟'],
+  'aiswitched': ['Switched to', 'تغییر به'],
   'aiconnected': ['Connected to', 'وصل شدید به'],
   'aipsiconnected': ['Connected via Psiphon to', 'از طریق سایفون وصل شدید به'],
   'aistatsnone': ['You are not connected right now.', 'در حال حاضر متصل نیستید.'],
