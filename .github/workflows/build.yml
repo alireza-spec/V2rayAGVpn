@@ -41,6 +41,8 @@ jobs:
           UNLIMITED_CONFIGS: ${{ secrets.UNLIMITED_CONFIGS }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
+          GONKA_API_KEY: ${{ secrets.GONKA_API_KEY }}
+          GONKA_BASE_URL: ${{ secrets.GONKA_BASE_URL }}
         run: |
           VERSION=$(grep '^version:' pubspec.yaml | sed 's/^version: *//; s/+.*//')
           NUM=$(echo "$VERSION" | tr -d '.')
@@ -57,7 +59,9 @@ jobs:
           UNL_B64=$(printf '%s' "$UNLIMITED_CONFIGS" | base64 -w0 2>/dev/null || printf '%s' "$UNLIMITED_CONFIGS" | base64)
           AIKEY_B64=$(printf '%s' "$AI_API_KEY" | base64 -w0 2>/dev/null || printf '%s' "$AI_API_KEY" | base64)
           AIBASE_B64=$(printf '%s' "$AI_BASE_URL" | base64 -w0 2>/dev/null || printf '%s' "$AI_BASE_URL" | base64)
-          flutter build apk --release --split-per-abi --dart-define=POOL_LIST="$LIST" --dart-define=POOL_URL="$POOL_URL" --dart-define=PROVIDERS_B64="$PROV_B64" --dart-define=PROVIDER_FAST_B64="$FAST_B64" --dart-define=PROVIDER_UPDATE_B64="$UPD_B64" --dart-define=PROVIDER_V2RAYAG_B64="$V2_B64" --dart-define=PROVIDER_ANTIFILTER_B64="$AF_B64" --dart-define=PROVIDER_HIDDIFY_B64="$HID_B64" --dart-define=PROVIDER_AI_B64="$AI_B64" --dart-define=PROVIDER_UNLIMITED_B64="$UNLPROV_B64" --dart-define=PSIPHON_B64="$PSI_B64" --dart-define=UNLIMITED_B64="$UNL_B64" --dart-define=AI_API_KEY_B64="$AIKEY_B64" --dart-define=AI_BASE_URL_B64="$AIBASE_B64" --dart-define=BUILD_NUM="$NUM"
+          GONKAKEY_B64=$(printf '%s' "$GONKA_API_KEY" | base64 -w0 2>/dev/null || printf '%s' "$GONKA_API_KEY" | base64)
+          GONKABASE_B64=$(printf '%s' "$GONKA_BASE_URL" | base64 -w0 2>/dev/null || printf '%s' "$GONKA_BASE_URL" | base64)
+          flutter build apk --release --split-per-abi --dart-define=POOL_LIST="$LIST" --dart-define=POOL_URL="$POOL_URL" --dart-define=PROVIDERS_B64="$PROV_B64" --dart-define=PROVIDER_FAST_B64="$FAST_B64" --dart-define=PROVIDER_UPDATE_B64="$UPD_B64" --dart-define=PROVIDER_V2RAYAG_B64="$V2_B64" --dart-define=PROVIDER_ANTIFILTER_B64="$AF_B64" --dart-define=PROVIDER_HIDDIFY_B64="$HID_B64" --dart-define=PROVIDER_AI_B64="$AI_B64" --dart-define=PROVIDER_UNLIMITED_B64="$UNLPROV_B64" --dart-define=PSIPHON_B64="$PSI_B64" --dart-define=UNLIMITED_B64="$UNL_B64" --dart-define=AI_API_KEY_B64="$AIKEY_B64" --dart-define=AI_BASE_URL_B64="$AIBASE_B64" --dart-define=GONKA_API_KEY_B64="$GONKAKEY_B64" --dart-define=GONKA_BASE_URL_B64="$GONKABASE_B64" --dart-define=BUILD_NUM="$NUM"
       - name: Collect APKs by architecture
         run: |
           mkdir -p dist
@@ -81,6 +85,8 @@ jobs:
           UNLIMITED_CONFIGS: ${{ secrets.UNLIMITED_CONFIGS }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
+          GONKA_API_KEY: ${{ secrets.GONKA_API_KEY }}
+          GONKA_BASE_URL: ${{ secrets.GONKA_BASE_URL }}
         run: |
           VERSION=$(grep '^version:' pubspec.yaml | sed 's/^version: *//; s/+.*//')
           NUM=$(echo "$VERSION" | tr -d '.')
@@ -97,7 +103,9 @@ jobs:
           UNL_B64=$(printf '%s' "$UNLIMITED_CONFIGS" | base64 -w0 2>/dev/null || printf '%s' "$UNLIMITED_CONFIGS" | base64)
           AIKEY_B64=$(printf '%s' "$AI_API_KEY" | base64 -w0 2>/dev/null || printf '%s' "$AI_API_KEY" | base64)
           AIBASE_B64=$(printf '%s' "$AI_BASE_URL" | base64 -w0 2>/dev/null || printf '%s' "$AI_BASE_URL" | base64)
-          flutter build apk --release --dart-define=POOL_LIST="$LIST" --dart-define=POOL_URL="$POOL_URL" --dart-define=PROVIDERS_B64="$PROV_B64" --dart-define=PROVIDER_FAST_B64="$FAST_B64" --dart-define=PROVIDER_UPDATE_B64="$UPD_B64" --dart-define=PROVIDER_V2RAYAG_B64="$V2_B64" --dart-define=PROVIDER_ANTIFILTER_B64="$AF_B64" --dart-define=PROVIDER_HIDDIFY_B64="$HID_B64" --dart-define=PROVIDER_AI_B64="$AI_B64" --dart-define=PROVIDER_UNLIMITED_B64="$UNLPROV_B64" --dart-define=PSIPHON_B64="$PSI_B64" --dart-define=UNLIMITED_B64="$UNL_B64" --dart-define=AI_API_KEY_B64="$AIKEY_B64" --dart-define=AI_BASE_URL_B64="$AIBASE_B64" --dart-define=BUILD_NUM="$NUM"
+          GONKAKEY_B64=$(printf '%s' "$GONKA_API_KEY" | base64 -w0 2>/dev/null || printf '%s' "$GONKA_API_KEY" | base64)
+          GONKABASE_B64=$(printf '%s' "$GONKA_BASE_URL" | base64 -w0 2>/dev/null || printf '%s' "$GONKA_BASE_URL" | base64)
+          flutter build apk --release --dart-define=POOL_LIST="$LIST" --dart-define=POOL_URL="$POOL_URL" --dart-define=PROVIDERS_B64="$PROV_B64" --dart-define=PROVIDER_FAST_B64="$FAST_B64" --dart-define=PROVIDER_UPDATE_B64="$UPD_B64" --dart-define=PROVIDER_V2RAYAG_B64="$V2_B64" --dart-define=PROVIDER_ANTIFILTER_B64="$AF_B64" --dart-define=PROVIDER_HIDDIFY_B64="$HID_B64" --dart-define=PROVIDER_AI_B64="$AI_B64" --dart-define=PROVIDER_UNLIMITED_B64="$UNLPROV_B64" --dart-define=PSIPHON_B64="$PSI_B64" --dart-define=UNLIMITED_B64="$UNL_B64" --dart-define=AI_API_KEY_B64="$AIKEY_B64" --dart-define=AI_BASE_URL_B64="$AIBASE_B64" --dart-define=GONKA_API_KEY_B64="$GONKAKEY_B64" --dart-define=GONKA_BASE_URL_B64="$GONKABASE_B64" --dart-define=BUILD_NUM="$NUM"
           cp build/app/outputs/flutter-apk/app-release.apk dist/V2rayAG-universal.apk
       - name: List files
         run: ls -la dist
