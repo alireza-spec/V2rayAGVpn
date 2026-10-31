@@ -2248,35 +2248,10 @@ class SettingsPage extends StatelessWidget {
         const SizedBox(height: 16),
         ListTile(leading: const Icon(Icons.share_outlined), title: Text(s.t('sharevpn')), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ShareVpnPage(s)))),
         ListTile(leading: const Icon(Icons.auto_awesome), title: Text(s.t('aichat')), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AiChatPage(s)))),
-        ListTile(title: Text(s.t('aikey')), subtitle: Text(s.t('aikey_h'))),
-        TextFormField(
-          initialValue: s.aiApiKey,
-          obscureText: true,
-          decoration: InputDecoration(labelText: s.t('aikey'), border: const OutlineInputBorder()),
-          onChanged: (v) {
-            s.aiApiKey = v.trim();
-            s.save();
-          },
-        ),
-        Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: Text(s.aiApiKey.isNotEmpty ? s.t('aikey_own') : (s.aiReady ? s.t('aikey_builtin') : s.t('aikey_none')), style: const TextStyle(color: Colors.grey, fontSize: 12)),
-        ),
-        const SizedBox(height: 12),
-        ListTile(title: Text(s.t('gonkakey')), subtitle: Text(s.t('gonkakey_h'))),
-        TextFormField(
-          initialValue: s.gonkaApiKey,
-          obscureText: true,
-          decoration: InputDecoration(labelText: s.t('gonkakey'), border: const OutlineInputBorder()),
-          onChanged: (v) {
-            s.gonkaApiKey = v.trim();
-            s.save();
-          },
-        ),
-        Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: Text(s.gonkaApiKey.isNotEmpty ? s.t('aikey_own') : (s.gonkaReady ? s.t('aikey_builtin') : s.t('aikey_none')), style: const TextStyle(color: Colors.grey, fontSize: 12)),
-        ),
+        // Key boxes are gone by design: keys are added through
+        // the chat's own Add yours flow (Test & Add), while the
+        // AI options below stay. Keys saved earlier keep working
+        // silently — nothing stored was deleted.
         SwitchListTile(
           title: Text(s.t('aipsi_set')),
           subtitle: Text(s.t('aipsi_set_h')),
