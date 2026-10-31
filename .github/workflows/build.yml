@@ -26,17 +26,19 @@ jobs:
         # v10.1.2: when the keystore secrets exist, every release is
         # signed with the same keystore, so users update instead of
         # reinstalling. When they are absent (v10.1.2 shipped without
-        # stable signing), this step is skipped and Gradle falls back
+        # stable signing), this step sets nothing and Gradle falls back
         # to debug signing. The keystore lives only in repo secrets;
-        # it is decoded here and never printed.
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        # it is decoded here and never printed. NOTE: secrets cannot be
+        # used in an `if:` condition (GitHub rejects the whole workflow
+        # file at parse time), so the empty-secret check lives inside
+        # the script instead.
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -z "$KEYSTORE_BASE64" ]; then echo "missing KEYSTORE_BASE64 secret"; exit 1; fi
+          if [ -z "$KEYSTORE_BASE64" ]; then echo "no keystore secret, using debug signing"; exit 0; fi
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > android/app/v2rayag-release.p12
           echo "KEYSTORE_FILE=$PWD/android/app/v2rayag-release.p12" >> $GITHUB_ENV
           echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> $GITHUB_ENV
