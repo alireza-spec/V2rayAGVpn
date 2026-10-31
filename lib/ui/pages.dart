@@ -454,7 +454,11 @@ class HomePage extends StatelessWidget {
             Text(s.t('${s.mode}_d'), textAlign: TextAlign.center, style: grey),
             if (s.mode == 'cdn') Text(s.cdnUsingProviderFallback ? '${s.t('cdnfromproviders')}: ${s.cdnCandidateCount}' : (s.cdnLinks.isNotEmpty ? '${s.t('cdnconfigs')}: ${s.cdnLinks.length}' : '${s.t('pool')}: ${s.pool.length}'), textAlign: TextAlign.center, style: grey.copyWith(fontSize: 12)),
             if (s.mode == 'cdn') Center(child: TextButton.icon(icon: const Icon(Icons.settings_outlined, size: 16), label: Text(s.t('cdnsetup'), style: const TextStyle(fontSize: 12)), onPressed: on || busy ? null : () => Navigator.push(ctx, MaterialPageRoute(builder: (_) => CdnPage(s))))),
-            if (s.mode == 'auto' || s.mode == 'smart') ProvidersPanel(s: s, locked: on || busy),
+            // v10.1.2: the providers box belongs to Automatic
+            // only. Smart tries providers, then CDN, then
+            // Psiphon on its own — its card must not carry the
+            // providers panel, its ticks or its refresh buttons.
+            if (s.mode == 'auto') ProvidersPanel(s: s, locked: on || busy),
             Center(
               child: PowerButton(
                 color: color,
