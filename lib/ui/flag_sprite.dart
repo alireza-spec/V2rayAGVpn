@@ -56,7 +56,14 @@ class FlagSprite extends StatelessWidget {
       builder: (_, snap) {
         final img = snap.data;
         if (img == null) return const SizedBox.shrink();
-        return CustomPaint(painter: _FlagPainter(img, info, flagSpriteLeftAligned.contains(code)));
+        // v10.1.2: a childless CustomPaint sizes itself to zero
+        // under the Stack's loose constraints, so the painter
+        // used to draw the flag into a 0x0 canvas — the button
+        // stayed plain green forever even with a known country.
+        // SizedBox.expand gives it the button's full size.
+        return SizedBox.expand(
+          child: CustomPaint(painter: _FlagPainter(img, info, flagSpriteLeftAligned.contains(code))),
+        );
       },
     );
   }
