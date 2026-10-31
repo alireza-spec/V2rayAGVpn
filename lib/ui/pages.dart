@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -2262,6 +2263,30 @@ class SettingsPage extends StatelessWidget {
           child: Text(s.aiApiKey.isNotEmpty ? s.t('aikey_own') : (s.aiReady ? s.t('aikey_builtin') : s.t('aikey_none')), style: const TextStyle(color: Colors.grey, fontSize: 12)),
         ),
         const SizedBox(height: 12),
+        ListTile(title: Text(s.t('gonkakey')), subtitle: Text(s.t('gonkakey_h'))),
+        TextFormField(
+          initialValue: s.gonkaApiKey,
+          obscureText: true,
+          decoration: InputDecoration(labelText: s.t('gonkakey'), border: const OutlineInputBorder()),
+          onChanged: (v) {
+            s.gonkaApiKey = v.trim();
+            s.save();
+          },
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(s.gonkaApiKey.isNotEmpty ? s.t('aikey_own') : (s.gonkaReady ? s.t('aikey_builtin') : s.t('aikey_none')), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+        ),
+        SwitchListTile(
+          title: Text(s.t('aipsi_set')),
+          subtitle: Text(s.t('aipsi_set_h')),
+          value: s.aiViaPsiphon,
+          onChanged: (v) {
+            s.aiViaPsiphon = v;
+            s.save();
+          },
+        ),
+        const SizedBox(height: 12),
         ListTile(title: Text(s.t('airemote')), subtitle: Text(s.t('airemote_h'))),
         TextFormField(
           initialValue: s.aiRemoteUrl,
@@ -2290,21 +2315,86 @@ class SettingsPage extends StatelessWidget {
       ]);
 }
 
-class LogsPage extends StatelessWidget {
+/// Vital log events only: connects, disconnects, errors,
+/// provider updates, sharing — the things a user actually needs
+/// to see. Everything else (per-server probes, cache notes,
+/// core state dumps) lives behind the bug toggle.
+bool _isVitalLog(String line) {
+  final low = line.toLowerCase();
+  // Raw core state transitions are noise in the vital view ("Core
+  // state: CONNECTED" fires for every attempt, even ones the app
+  // then rejects as no-traffic): the real verdicts are the
+  // "CONNECTED via ..." and disconnect lines. Keep DISCONNECTED:
+  // it is the only signal the tunnel dropped.
+  if (low.contains('core state:') && !low.contains('disconnected')) return false;
+  const keys = [
+    'connected',
+    'disconnected',
+    'disconnect',
+    'error',
+    'failed',
+    'failure',
+    'gave up',
+    'refreshed',
+    'pool refreshed',
+    'share vpn',
+    'traffic failed',
+    'no working server',
+    'no traffic',
+    'session',
+    'providers in order',
+    'mode:',
+  ];
+  return keys.any(low.contains);
+}
+
+class LogsPage extends StatefulWidget {
   const LogsPage(this.s, {super.key});
   final Store s;
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-        listenable: s,
-        builder: (ctx, _) => Scaffold(
+  State<LogsPage> createState() => _LogsState();
+}
+
+class _LogsState extends State<LogsPage> {
+  // Default: vital events only, so the page is readable. The
+  // bug icon shows the full detailed log, exactly as before.
+  bool detailed = false;
+
+  Future<void> _exportLogs(BuildContext ctx) async {
+    final s = widget.s;
+    final text = s.logs.reversed.join('\n');
+    final uri = await FilePicker.saveFile(
+      dialogTitle: s.t('logexport'),
+      fileName: 'v2rayag-logs.txt',
+      bytes: Uint8List.fromList(utf8.encode(text)),
+    );
+    if (uri != null && ctx.mounted) toast(ctx, s.t('logexported'));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.s;
+    return ListenableBuilder(
+      listenable: s,
+      builder: (ctx, _) {
+        final lines = detailed ? s.logs : s.logs.where(_isVitalLog).toList();
+        return Scaffold(
           appBar: AppBar(title: Text(s.t('logs')), actions: [
             IconButton(
               icon: const Icon(Icons.auto_awesome),
               tooltip: s.t('aichat'),
               onPressed: () => Navigator.push(ctx, MaterialPageRoute(builder: (_) => AiChatPage(s, attachment: s.logs.reversed.join('\n'), attachmentLabel: '${s.logs.length} ${s.t('logs')}'))),
             ),
-            IconButton(icon: const Icon(Icons.bug_report_outlined), tooltip: 'System log', onPressed: s.captureSystemLog),
+            // Bug toggle: vital-only ⇄ full detailed log.
+            // Long-press still captures the system log, as before.
+            IconButton(
+              icon: Icon(detailed ? Icons.bug_report : Icons.bug_report_outlined),
+              tooltip: detailed ? s.t('logvital') : s.t('logdetail'),
+              onPressed: () => setState(() => detailed = !detailed),
+              onLongPress: s.captureSystemLog,
+            ),
+            IconButton(icon: const Icon(Icons.file_download_outlined), tooltip: s.t('logexport'), onPressed: () => _exportLogs(ctx)),
             IconButton(icon: const Icon(Icons.copy), onPressed: () => copyText(ctx, s, s.logs.reversed.join('\n'))),
             IconButton(
               icon: const Icon(Icons.delete_outline),
@@ -2320,44 +2410,48 @@ class LogsPage extends StatelessWidget {
           // rest stay plain. Text color is inherited, so it stays
           // light on dark themes and dark on light themes; borders are
           // always grey.
-          body: ListView.builder(
-            padding: const EdgeInsets.all(12),
-            itemCount: s.logs.length,
-            itemBuilder: (_, i) {
-              final line = s.logs[i];
-              // Log lines are "HH:MM:SS  message" (see Store.log).
-              final m = RegExp(r'^(\d{2}:\d{2}:\d{2})\s+(.*)$').firstMatch(line);
-              final time = m?.group(1) ?? '';
-              final msg = m?.group(2) ?? line;
-              final low = msg.toLowerCase();
-              final isFail = low.contains('failed') || low.contains('error');
-              final isConn = !isFail && low.contains('connected') && !low.contains('disconnected');
-              final tint = isFail ? Colors.redAccent : (isConn ? Colors.greenAccent : null);
-              // v1.0.7: tapping a log box opens the AI chat with
-              // exactly that line attached, and the AI starts
-              // explaining it in plain language right away.
-              return InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: () => Navigator.push(ctx, MaterialPageRoute(builder: (_) => AiChatPage(s, attachment: line, attachmentLabel: s.t('ailogline'), autoAsk: s.t('aiexplain_q')))),
-                child: Container(
-                  margin: const EdgeInsets.only(bottom: 6),
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey),
-                    borderRadius: BorderRadius.circular(8),
-                    color: tint?.withOpacity(0.10),
-                  ),
-                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    if (time.isNotEmpty) ...[
-                      Text(time, style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: Colors.grey)),
-                      const SizedBox(width: 10),
-                    ],
-                    Expanded(child: SelectableText(msg, style: const TextStyle(fontFamily: 'monospace', fontSize: 12))),
-                  ]),
+          body: lines.isEmpty
+              ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(detailed ? s.t('nologs') : s.t('logvitalempty'), textAlign: TextAlign.center, style: const TextStyle(color: Colors.grey))))
+              : ListView.builder(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: lines.length,
+                  itemBuilder: (_, i) {
+                    final line = lines[i];
+                    // Log lines are "HH:MM:SS  message" (see Store.log).
+                    final m = RegExp(r'^(\d{2}:\d{2}:\d{2})\s+(.*)$').firstMatch(line);
+                    final time = m?.group(1) ?? '';
+                    final msg = m?.group(2) ?? line;
+                    final low = msg.toLowerCase();
+                    final isFail = low.contains('failed') || low.contains('error');
+                    final isConn = !isFail && low.contains('connected') && !low.contains('disconnected');
+                    final tint = isFail ? Colors.redAccent : (isConn ? Colors.greenAccent : null);
+                    // v1.0.7: tapping a log box opens the AI chat with
+                    // exactly that line attached, and the AI starts
+                    // explaining it in plain language right away.
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: () => Navigator.push(ctx, MaterialPageRoute(builder: (_) => AiChatPage(s, attachment: line, attachmentLabel: s.t('ailogline'), autoAsk: s.t('aiexplain_q')))),
+                      child: Container(
+                        margin: const EdgeInsets.only(bottom: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey),
+                          borderRadius: BorderRadius.circular(8),
+                          color: tint?.withOpacity(0.10),
+                        ),
+                        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          if (time.isNotEmpty) ...[
+                            Text(time, style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: Colors.grey)),
+                            const SizedBox(width: 10),
+                          ],
+                          Expanded(child: SelectableText(msg, style: const TextStyle(fontFamily: 'monospace', fontSize: 12))),
+                        ]),
+                      ),
+                    );
+                  },
                 ),
-              );
-            },
-          ),
-        ),
-      );
+        );
+      },
+    );
+  }
 }
