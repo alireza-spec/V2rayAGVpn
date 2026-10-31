@@ -1205,19 +1205,26 @@ class _PBState extends State<PowerButton> with TickerProviderStateMixin {
             child: Center(
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 350),
-                width: 176,
-                height: 176,
+                // v10.1.4: while connecting the sun is smaller and
+                // dimmer — it must sit INSIDE the planet orbits
+                // (Mercury orbits at 98, so a 60-radius sun leaves
+                // real clearance) instead of glaring over them, so
+                // the planets stay visible. Other states keep the
+                // 176 disc exactly as before.
+                width: st == 1 ? 120 : 176,
+                height: st == 1 ? 120 : 176,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   gradient: st == 2
                       ? const LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [Color(0xFF3BE88C), Color(0xFF0E9F5F)])
                       : (st == 1
-                          // v10.1.3 (model 53): the connecting
-                          // button is the sun — warm realistic disc.
-                          ? const RadialGradient(center: Alignment(-0.25, -0.3), colors: [Color(0xFFFFFBEB), Color(0xFFFDE68A), Color(0xFFF59E0B), Color(0xFFEA580C)], stops: [0, .45, .8, 1])
+                          // v10.1.4: dimmer sun — softer edge and a
+                          // weaker, tighter glow so it no longer
+                          // washes out the inner orbits.
+                          ? const RadialGradient(center: Alignment(-0.25, -0.3), colors: [Color(0xFFFFF7ED), Color(0xFFFED7AA), Color(0xFFF59E0B), Color(0xFFB45309)], stops: [0, .5, .8, 1])
                           : RadialGradient(colors: [col.withOpacity(.24), col.withOpacity(.06)])),
-                  border: Border.all(color: st == 2 ? col.withOpacity(0) : (st == 1 ? Colors.white.withOpacity(.35) : col.withOpacity(.8)), width: 3),
-                  boxShadow: [BoxShadow(color: st == 1 ? const Color(0xFFF59E0B).withOpacity(.5) : col.withOpacity(st == 0 ? .25 : .5), blurRadius: st == 0 ? 24 : 48, spreadRadius: st == 2 ? 6 : 0)],
+                  border: Border.all(color: st == 2 ? col.withOpacity(0) : (st == 1 ? Colors.white.withOpacity(.25) : col.withOpacity(.8)), width: 3),
+                  boxShadow: [BoxShadow(color: st == 1 ? const Color(0xFFF59E0B).withOpacity(.3) : col.withOpacity(st == 0 ? .25 : .5), blurRadius: st == 1 ? 24 : (st == 0 ? 24 : 48), spreadRadius: st == 2 ? 6 : 0)],
                 ),
                 child: st == 2 && _cc != null
                     ? Stack(
@@ -1289,8 +1296,8 @@ class _ShinePainter extends CustomPainter {
 }
 
 /// v10.1.3 (model 53): the real solar system for the connecting
-/// state. r = orbit radius (the button sun is radius 88, so the
-/// orbits start just outside it), sp = compressed orbital speed,
+/// state. r = orbit radius (v10.1.4: the button sun is radius 60,
+/// so the orbits clear it with room to spare), sp = compressed orbital speed,
 /// phase = each planet's own starting angle and incl = its own
 /// orbit tilt — so the planets are scattered naturally around
 /// the system instead of starting in one row or moving in
