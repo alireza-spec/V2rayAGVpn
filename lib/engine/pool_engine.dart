@@ -808,11 +808,21 @@ class PoolEngine {
   /// 20s instead of leaving the card blank forever. The verify
   /// speedup from v1.0.5 is untouched: this still never blocks
   /// "Connected".
+  /// v10.1.3: core starts now disallow the app itself, so a direct
+  /// fetch in VPN mode returns the real IP too — the fallback is
+  /// skipped in that case, exactly like proxy-only mode.
   Future<void> _refreshGeoInBackground(String link) async {
     Future<Map<String, String>?> fetch() async {
       final g = await _lookupIp();
       if (g != null) return g;
-      if (!proxyOnly) return _lookupIp(direct: true);
+      // v10.1.3: the direct fallback is only a safe exit-IP path
+      // while the app's own traffic traverses the TUN. Core starts
+      // now disallow the app itself (like Psiphon modes), so a
+      // direct fetch would return the REAL IP and must never pose
+      // as the exit location — skip it then, as proxyOnly does.
+      if (!proxyOnly && !blockedApps.contains('com.v2rayag.v2rayag')) {
+        return _lookupIp(direct: true);
+      }
       return null;
     }
 
