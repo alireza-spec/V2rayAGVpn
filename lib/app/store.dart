@@ -352,6 +352,13 @@ const _tr = <String, List<String>>{
   'ainotconn': ['You are not connected.', 'شما وصل نیستید.'],
   'aiconnecting': ['Connecting you to', 'در حال اتصال شما به'],
   'aiconnected': ['Connected to', 'وصل شدید به'],
+  'aipsiconnected': ['Connected via Psiphon to', 'از طریق سایفون وصل شدید به'],
+  'aistatsnone': ['You are not connected right now.', 'در حال حاضر متصل نیستید.'],
+  'aidelprovider': ['Delete this provider?', 'این ارائه‌دهنده حذف شود؟'],
+  'aidelprovider_h': ['This removes the provider and all its models.', 'این کار ارائه‌دهنده و همه مدل‌هایش را حذف می‌کند.'],
+  'aidelmodel': ['Delete this model?', 'این مدل حذف شود؟'],
+  'aidelmodel_h': ['Only this model will be removed. The rest stay.', 'فقط همین مدل حذف می‌شود. بقیه می‌مانند.'],
+  'aidelete': ['Delete', 'حذف'],
   'aiconnectfail': ['Could not connect:', 'اتصال ممکن نشد:'],
   'aiconnectwait': ['Still connecting — check the Home tab for the result.', 'هنوز در حال اتصال است — نتیجه را در تب خانه ببینید.'],
   'aifound': ['Found these servers:', 'این سرورها پیدا شد:'],
@@ -565,6 +572,9 @@ class Store extends ChangeNotifier {
   List<Map<String, dynamic>> customProviders = [];
   String customName = '';
   String customModel = '';
+  // Providers the user collapsed in the model menu (default:
+  // expanded, so a freshly added provider shows its models).
+  List<String> collapsedProviders = [];
   String aiRemoteUrl = '';
   String aiRemoteKey = '';
   String aiRemoteBase = '';
@@ -750,6 +760,9 @@ class Store extends ChangeNotifier {
           .toList();
       customName = j['customName'] ?? '';
       customModel = j['customModel'] ?? '';
+      collapsedProviders = (j['collapsedProviders'] as List? ?? [])
+          .map((e) => '$e')
+          .toList();
       aiRemoteUrl = j['aiRemoteUrl'] ?? '';
       aiRemoteKey = j['aiRemoteKey'] ?? '';
       aiRemoteBase = j['aiRemoteBase'] ?? '';
@@ -784,7 +797,7 @@ class Store extends ChangeNotifier {
         'providerLastRefresh': providerLastRefresh, 'srcCache': srcCache, 'providersExpanded': providersExpanded, 'connType': connType, 'appMode': appMode, 'appSet': appSet.toList(),
         'cdnLinks': cdnLinks, 'fragment': fragment, 'fragAll': fragAll, 'fragLen': fragLen, 'fragInt': fragInt, 'testUrl': testUrl, 'autoSortAfterTest': autoSortAfterTest, 'deleteConfirm': deleteConfirm,
         'subFirst': subFirst, 'subLinks': subLinks, 'subRemoved': subRemoved,
-        'useIpv6': useIpv6, 'userHosts': userHosts, 'aiApiKey': aiApiKey, 'aiModel': aiModel, 'aiProvider': aiProvider, 'gonkaModel': gonkaModel, 'gonkaApiKey': gonkaApiKey, 'customProviders': customProviders, 'customName': customName, 'customModel': customModel, 'aiRemoteUrl': aiRemoteUrl, 'aiRemoteKey': aiRemoteKey, 'aiRemoteBase': aiRemoteBase, 'aiRemoteModel': aiRemoteModel, 'aiViaPsiphon': aiViaPsiphon, 'sharedProxyHost': sharedProxyHost, 'sharedProxyPort': sharedProxyPort, 'sharedProxyUser': sharedProxyUser, 'sharedProxyPass': sharedProxyPass, 'sharePort': sharePort,
+        'useIpv6': useIpv6, 'userHosts': userHosts, 'aiApiKey': aiApiKey, 'aiModel': aiModel, 'aiProvider': aiProvider, 'gonkaModel': gonkaModel, 'gonkaApiKey': gonkaApiKey, 'customProviders': customProviders, 'customName': customName, 'customModel': customModel, 'collapsedProviders': collapsedProviders, 'aiRemoteUrl': aiRemoteUrl, 'aiRemoteKey': aiRemoteKey, 'aiRemoteBase': aiRemoteBase, 'aiRemoteModel': aiRemoteModel, 'aiViaPsiphon': aiViaPsiphon, 'sharedProxyHost': sharedProxyHost, 'sharedProxyPort': sharedProxyPort, 'sharedProxyUser': sharedProxyUser, 'sharedProxyPass': sharedProxyPass, 'sharePort': sharePort,
       }));
     } catch (_) {}
     notifyListeners();
