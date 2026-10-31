@@ -14,6 +14,7 @@ import '../engine/pool_engine.dart';
 import '../engine/psiphon_engine.dart';
 import '../engine/scanner.dart';
 import 'ai_chat.dart';
+import 'flag_sprite.dart';
 import 'logo.dart';
 import 'net_tools.dart';
 import 'share_vpn.dart';
@@ -311,13 +312,13 @@ class Shell extends StatelessWidget {
                                 context: ctx,
                                 builder: (_) => AlertDialog(
                                   title: const Text('V2rayAG'),
-                                  content: Text('${s.t('dev')}\nTelegram: @V2rayAG\nBuild $kBuildNum'),
+                                  content: Text('${s.t('dev')}\nTelegram: @V2rayAG\n$kAppVersion'),
                                   actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text(s.t('ok')))],
                                 ),
                               )),
                         ]),
                       ),
-                      Padding(padding: const EdgeInsets.all(10), child: Text('V2rayAG  build $kBuildNum', style: const TextStyle(fontSize: 11, color: Colors.grey))),
+                      Padding(padding: const EdgeInsets.all(10), child: Text('V2rayAG  $kAppVersion', style: const TextStyle(fontSize: 11, color: Colors.grey))),
                     ]);
                       },
                     );
@@ -458,6 +459,7 @@ class HomePage extends StatelessWidget {
               child: PowerButton(
                 color: color,
                 state: st,
+                countryCode: e.countryCode,
                 onTap: () {
                   if (on || busy) {
                     s.disconnectAll();
@@ -562,6 +564,7 @@ class HomePage extends StatelessWidget {
               child: PowerButton(
                 color: color,
                 state: st,
+                countryCode: e.region,
                 onTap: () {
                   if (on || busy) {
                     // Must go through disconnectAll: in whole-device mode
@@ -1100,20 +1103,61 @@ class SubCard extends StatelessWidget {
 
 /// state: 0 disconnected, 1 connecting, 2 connected
 class PowerButton extends StatefulWidget {
-  const PowerButton({super.key, required this.color, required this.state, required this.onTap});
+  const PowerButton({super.key, required this.color, required this.state, required this.onTap, this.countryCode});
   final Color color;
   final int state;
   final VoidCallback onTap;
+  // v10.1.1: exit country code (e.g. 'us') once the location is
+  // known; null while connecting or while geo is still loading —
+  // the button stays original until then.
+  final String? countryCode;
   @override
   State<PowerButton> createState() => _PBState();
 }
 
-class _PBState extends State<PowerButton> with SingleTickerProviderStateMixin {
+class _PBState extends State<PowerButton> with TickerProviderStateMixin {
   late final AnimationController c = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400))..repeat();
+  // v10.1.1: the flag wash — one quick left-to-right sweep when
+  // the location is first known, then the flag stays. States 0
+  // (disconnect) and 1 (connecting) never touch this.
+  late final AnimationController _wash = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
+  String? _washedCc;
+
+  String? get _cc {
+    final c = widget.countryCode;
+    if (c == null || c.isEmpty) return null;
+    return c.toLowerCase();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _maybeStartWash();
+  }
+
+  @override
+  void didUpdateWidget(covariant PowerButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _maybeStartWash();
+  }
+
+  void _maybeStartWash() {
+    final cc = _cc;
+    if (widget.state == 2 && cc != null) {
+      if (_washedCc != cc) {
+        _washedCc = cc;
+        _wash.forward(from: 0);
+      }
+    } else {
+      _washedCc = null;
+      _wash.reset();
+    }
+  }
 
   @override
   void dispose() {
     c.dispose();
+    _wash.dispose();
     super.dispose();
   }
 
@@ -1154,11 +1198,43 @@ class _PBState extends State<PowerButton> with SingleTickerProviderStateMixin {
                   border: Border.all(color: col.withOpacity(st == 2 ? 0 : .8), width: 3),
                   boxShadow: [BoxShadow(color: col.withOpacity(st == 0 ? .25 : .5), blurRadius: st == 0 ? 24 : 48, spreadRadius: st == 2 ? 6 : 0)],
                 ),
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 350),
-                  transitionBuilder: (w, a) => ScaleTransition(scale: a, child: FadeTransition(opacity: a, child: w)),
-                  child: _icon(c.value),
-                ),
+                child: st == 2 && _cc != null
+                    ? Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          // Flag wash: sweeps in once when the
+                          // location is known, then stays. The
+                          // green gradient shows underneath
+                          // during the sweep, like the demo.
+                          AnimatedBuilder(
+                            animation: _wash,
+                            builder: (_, __) => ClipOval(
+                              child: SizedBox(
+                                width: 176,
+                                height: 176,
+                                child: Stack(children: [
+                                  ClipRect(
+                                    clipper: RevealClipper(_wash.value),
+                                    child: FlagSprite(code: _cc!),
+                                  ),
+                                  if (_wash.value > 0 && _wash.value < 1)
+                                    Positioned.fill(
+                                      child: CustomPaint(painter: _ShinePainter(_wash.value)),
+                                    ),
+                                ]),
+                              ),
+                            ),
+                          ),
+                          // The shield stays on top of the flag,
+                          // exactly as in the approved design.
+                          const Icon(Icons.verified_user_rounded, size: 84, color: Colors.white),
+                        ],
+                      )
+                    : AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 350),
+                        transitionBuilder: (w, a) => ScaleTransition(scale: a, child: FadeTransition(opacity: a, child: w)),
+                        child: _icon(c.value),
+                      ),
               ),
             ),
           ),
@@ -1166,6 +1242,29 @@ class _PBState extends State<PowerButton> with SingleTickerProviderStateMixin {
       ),
     );
   }
+}
+
+/// Soft light band passing over the flag during the wash.
+class _ShinePainter extends CustomPainter {
+  _ShinePainter(this.v);
+  final double v;
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width * 0.35;
+    final x = -w + v * (size.width + w);
+    final paint = Paint()
+      ..shader = LinearGradient(
+        colors: [Colors.white.withOpacity(0), Colors.white.withOpacity(.35), Colors.white.withOpacity(0)],
+        stops: const [0, .5, 1],
+      ).createShader(Rect.fromLTWH(x, 0, w, size.height));
+    canvas.save();
+    canvas.clipPath(Path()..addOval(Rect.fromLTWH(0, 0, size.width, size.height)));
+    canvas.drawRect(Rect.fromLTWH(x, 0, w, size.height), paint);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _ShinePainter o) => o.v != v;
 }
 
 class _Rings extends CustomPainter {
