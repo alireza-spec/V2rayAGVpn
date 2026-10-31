@@ -24,7 +24,7 @@ const kBuildNum = String.fromEnvironment('BUILD_NUM', defaultValue: '0');
 // number. Keep in sync with pubspec.yaml's version (the part
 // before the +build number). kBuildNum above stays for the
 // in-app update check's digit comparison only.
-const kAppVersion = '10.1.3';
+const kAppVersion = '10.1.5';
 
 const _tr = <String, List<String>>{
   'home': ['Home', 'خانه'],
@@ -2033,12 +2033,20 @@ class Store extends ChangeNotifier {
     connect();
   }
 
-  void connectLink(String l) {
+  // v10.1.4: tapping a server while another session is active used
+  // to silently do nothing — engine.connect() returns early while
+  // a session is wanted, so the app stayed on the old server and
+  // every tapped config showed the old server's location.
+  // Disconnect first, then connect to the tapped config for real.
+  Future<void> connectLink(String l) async {
     mode = 'personal';
     single = l;
     activeSub = null;
     save();
     go(0);
+    if ((engine.state.phase != Phase.idle && engine.state.phase != Phase.failed) || psiphon.state.phase != PsiphonPhase.idle) {
+      await disconnectAll();
+    }
     connect();
   }
 
