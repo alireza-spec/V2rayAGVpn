@@ -49,7 +49,7 @@ Future<SpeedResult> runSpeedTest(
     final c = clientFactory(const Duration(seconds: 4));
     final sw = Stopwatch()..start();
     try {
-      final r = await (await c.getUrl(Uri.parse('http://cp.cloudflare.com/generate_204'))).close().timeout(const Duration(seconds: 4));
+      final r = await (await c.getUrl(Uri.parse('http://cp.cloudflare.com/'))).close().timeout(const Duration(seconds: 4));
       await r.drain();
       if (r.statusCode == 204 || r.statusCode == 200) {
         pingSamples.add(sw.elapsedMilliseconds);
