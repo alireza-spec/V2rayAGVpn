@@ -173,6 +173,177 @@ String? serverHostFromLink(String link) {
   }
 }
 
+/// v10.1.7: loose base64 decode for pasted blobs: whitespace
+/// stripped, URL-safe alphabet accepted, padding repaired. Used
+/// by paste import (encoded config lists) and the Tools codec
+/// page. Returns null when the text is not base64 at all.
+String? decodeBase64Loose(String s) {
+  try {
+    final b = s.replaceAll(RegExp(r'\s'), '').replaceAll('-', '+').replaceAll('_', '/');
+    if (b.isEmpty || !RegExp(r'^[A-Za-z0-9+/=]+$').hasMatch(b)) return null;
+    return utf8.decode(base64.decode(base64.normalize(b)), allowMalformed: true);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// v10.1.7: normalize a pasted full Xray JSON config (v2rayNG
+/// export style) so the plugin accepts it in VPN mode. The
+/// plugin's VPN session authorization rejects socks/http
+/// inbounds that do not listen on loopback or carry a custom
+/// tag, so such inbounds are pinned to 127.0.0.1 and to a
+/// managed tag (socks/http, uniquified when needed), and
+/// routing rules that referenced the old tags are rewritten.
+/// Everything else (outbounds, routing, dns) is untouched.
+/// Returns the normalized JSON string, or null when the input
+/// is not a config object with at least one outbound.
+String? normalizeJsonConfig(String json) {
+  try {
+    final d = jsonDecode(json);
+    if (d is! Map<String, dynamic>) return null;
+    final obs = d['outbounds'];
+    if (obs is! List || obs.isEmpty) return null;
+    final inbounds = d['inbounds'];
+    if (inbounds is List) {
+      const managed = {'socks', 'socks-in', 'http', 'http-in'};
+      final used = <String>{};
+      for (final ib in inbounds) {
+        if (ib is Map<String, dynamic>) used.add('${ib['tag'] ?? ''}');
+      }
+      final rename = <String, String>{};
+      for (final ib in inbounds) {
+        if (ib is! Map<String, dynamic>) continue;
+        final proto = '${ib['protocol'] ?? ''}'.toLowerCase();
+        if (proto != 'socks' && proto != 'http') continue;
+        final listen = '${ib['listen'] ?? ''}';
+        if (listen != '127.0.0.1' && listen != '::1' && listen != 'localhost') {
+          ib['listen'] = '127.0.0.1';
+        }
+        final tag = '${ib['tag'] ?? ''}';
+        if (!managed.contains(tag)) {
+          var nt = proto;
+          var k = 2;
+          while (used.contains(nt)) {
+            nt = '${proto}_$k';
+            k++;
+          }
+          used.add(nt);
+          if (tag.isNotEmpty) rename[tag] = nt;
+          ib['tag'] = nt;
+        }
+      }
+      if (rename.isNotEmpty) {
+        final routing = d['routing'];
+        if (routing is Map<String, dynamic>) {
+          final rules = routing['rules'];
+          if (rules is List) {
+            for (final r in rules) {
+              if (r is! Map<String, dynamic>) continue;
+              final it = r['inboundTag'];
+              if (it is List) {
+                for (var i = 0; i < it.length; i++) {
+                  if (it[i] is String && rename.containsKey(it[i])) it[i] = rename[it[i]!]!;
+                }
+              } else if (it is String && rename.containsKey(it)) {
+                r['inboundTag'] = rename[it]!;
+              }
+            }
+          }
+        }
+      }
+    }
+    return jsonEncode(d);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// v10.1.7: a pasted full JSON config becomes a storable link:
+/// 'json:' + base64url(normalized JSON). The pasted text may
+/// itself be base64-encoded. Returns null when the text is not
+/// a JSON config.
+String? jsonLinkFromText(String text) {
+  final t = text.trim();
+  final candidates = <String>[t];
+  if (!t.contains('://') && !t.startsWith('{')) {
+    final decoded = decodeBase64Loose(t);
+    if (decoded != null) candidates.add(decoded.trim());
+  }
+  for (final c in candidates) {
+    if (!c.startsWith('{')) continue;
+    final norm = normalizeJsonConfig(c);
+    if (norm != null) return 'json:${base64Url.encode(utf8.encode(norm))}';
+  }
+  return null;
+}
+
+/// v10.1.7: the normalized JSON behind a 'json:' link, or null
+/// when the link is malformed or not a config.
+String? decodeJsonLink(String link) {
+  if (!link.startsWith('json:')) return null;
+  try {
+    final raw = utf8.decode(base64.decode(base64.normalize(link.substring(5))), allowMalformed: true);
+    return normalizeJsonConfig(raw);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// v10.1.7: the first proxy outbound's server (host + port) of a
+/// config JSON, for display, testing and geo. Returns null when
+/// no usable server is found.
+({String host, int port})? jsonServerHostPort(String cfg) {
+  try {
+    final d = jsonDecode(cfg);
+    if (d is! Map<String, dynamic>) return null;
+    final obs = d['outbounds'];
+    if (obs is! List) return null;
+    for (final o in obs) {
+      if (o is! Map<String, dynamic>) continue;
+      final proto = '${o['protocol'] ?? ''}'.toLowerCase();
+      if (proto == 'freedom' || proto == 'blackhole') continue;
+      final s = o['settings'];
+      if (s is! Map<String, dynamic>) return null;
+      String? host;
+      var port = 0;
+      final vn = s['vnext'];
+      if (vn is List && vn.isNotEmpty && vn.first is Map<String, dynamic>) {
+        final v0 = vn.first as Map<String, dynamic>;
+        host = '${v0['address'] ?? ''}';
+        final p = v0['port'];
+        port = p is int ? p : (p is num ? p.toInt() : 0);
+      }
+      host ??= '${s['address'] ?? ''}';
+      if (port <= 0) {
+        final p = s['port'];
+        port = p is int ? p : (p is num ? p.toInt() : 0);
+      }
+      if (host.isEmpty) {
+        final servers = s['servers'];
+        if (servers is List && servers.isNotEmpty && servers.first is Map<String, dynamic>) {
+          final s0 = servers.first as Map<String, dynamic>;
+          host = '${s0['address'] ?? ''}';
+          final p = s0['port'];
+          port = p is int ? p : (p is num ? p.toInt() : 0);
+        }
+      }
+      if (host.isEmpty || port <= 0) return null;
+      return (host: host, port: port);
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// v10.1.7: display name of a JSON config: its server, or a
+/// generic label when the server cannot be read.
+String jsonConfigName(String cfg) {
+  final hp = jsonServerHostPort(cfg);
+  if (hp == null) return 'JSON config';
+  return '${hp.host}:${hp.port}';
+}
+
 /// v10.1.6: shared geo-body parser for _lookupIp and
 /// _lookupServerGeo. JSON sources carry city/country; plain-IP
 /// sources answer the IP only. A failure status is never an
@@ -440,15 +611,16 @@ class PoolEngine {
   String? _restoredLink;
 
   /// Real-delay test endpoint, set from Store (Settings → Real delay test URL).
-  /// Default is Cloudflare's generate_204; the probe always falls back to
-  /// gstatic and Cloudflare, so one blocked host never kills the real test.
-  /// This is the same kind of endpoint NPV Tunnel and V2rayNG use:
-  /// generate_204 answers with an empty 204, so the test measures a real
-  /// round trip through the tunnel without downloading anything.
-  String testUrl = 'https://cp.cloudflare.com/generate_204';
+  /// v10.1.7: plain http://cp.cloudflare.com/ (root, no TLS, no
+  /// generate_204). Device-proven: the HTTPS generate_204 URLs
+  /// marked healthy configs as failed (the TLS fetch through the
+  /// config fails where a plain HTTP fetch succeeds), while the
+  /// plain Cloudflare root gives an almost-real ping. The old
+  /// generate_204 links are gone from every test path.
+  String testUrl = 'http://cp.cloudflare.com/';
   List<String> get _testUrls {
     final out = <String>[];
-    for (final u in [testUrl, 'https://www.gstatic.com/generate_204', 'http://cp.cloudflare.com/generate_204', 'http://connectivitycheck.gstatic.com/generate_204']) {
+    for (final u in [testUrl, 'http://cp.cloudflare.com/']) {
       if (u.isNotEmpty && !out.contains(u)) out.add(u);
     }
     return out;
@@ -1308,6 +1480,19 @@ class PoolEngine {
     final priLinks = <String>[];
     final restLinks = <String>[];
     for (final l in filtered) {
+      // v10.1.7: pasted full-JSON configs are not share links, so
+      // they bypass variants/parsing entirely: the decoded JSON
+      // becomes a candidate directly (sampling cap does not apply
+      // to personal lists, which are small).
+      if (l.startsWith('json:')) {
+        final cfg = decodeJsonLink(l);
+        if (cfg != null && configLooksValid(cfg)) {
+          out.add(Candidate(l, jsonConfigName(cfg), cfg, none));
+        } else {
+          invalidFields++;
+        }
+        continue;
+      }
       if (isPri(l)) {
         priLinks.add(l);
       } else {
