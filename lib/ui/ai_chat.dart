@@ -742,6 +742,8 @@ const _freeModels = ['glm-4.7-flash', 'glm-4.5-flash'];
 /// why the app default stays on Z.ai's glm-4.5-flash while these
 /// three are switchable choices.
 const _gonkaModels = ['zai-org/GLM-5.3-Flash', 'deepseek-ai/DeepSeek-V4-Flash-0731', 'MiniMaxAI/MiniMax-M2.7'];
+const _cfModels = ['@cf/meta/llama-3.3-70b-instruct-fp8-fast', '@cf/meta/llama-3.1-8b-instruct-fast'];
+String _cfLabel(String m) => m.contains('3.3-70b') ? 'Llama 3.3 70B' : m.contains('3.1-8b') ? 'Llama 3.1 8B' : m;
 
 String _gonkaLabel(String m) => switch (m) {
       'zai-org/GLM-5.3-Flash' => 'GLM-5.3 Flash',
@@ -1037,21 +1039,25 @@ class _AiChatState extends State<AiChatPage> {
       _saveChats();
       return;
     }
-    final keyOk = s.aiProvider == 'gonka'
-        ? s.gonkaReady
-        : s.aiProvider == 'custom'
-            ? s.customReady
-            : s.aiReady;
+    final keyOk = s.aiProvider == 'cf'
+        ? s.cfReady
+        : s.aiProvider == 'gonka'
+            ? s.gonkaReady
+            : s.aiProvider == 'custom'
+                ? s.customReady
+                : s.aiReady;
     if (!keyOk) {
       if (mounted) {
         setState(() {
           msgs.add(_m(
               false,
-              s.aiProvider == 'gonka'
-                  ? s.tLang('gonkanokey', fa)
-                  : s.aiProvider == 'custom'
-                      ? s.tLang('customnokey', fa)
-                      : s.tLang('ainokey', fa)));
+              s.aiProvider == 'cf'
+                  ? s.tLang('cfnokey', fa)
+                  : s.aiProvider == 'gonka'
+                      ? s.tLang('gonkanokey', fa)
+                      : s.aiProvider == 'custom'
+                          ? s.tLang('customnokey', fa)
+                          : s.tLang('ainokey', fa)));
           busy = false;
         });
         _saveChats();
@@ -1176,21 +1182,25 @@ class _AiChatState extends State<AiChatPage> {
     // No key, no call, no fake answer. The gate is per provider:
     // a Gonka pick needs the Gonka key, a Z.ai pick the Z.ai key,
     // a custom pick its own key.
-    final keyOk = s.aiProvider == 'gonka'
-        ? s.gonkaReady
-        : s.aiProvider == 'custom'
-            ? s.customReady
-            : s.aiReady;
+    final keyOk = s.aiProvider == 'cf'
+        ? s.cfReady
+        : s.aiProvider == 'gonka'
+            ? s.gonkaReady
+            : s.aiProvider == 'custom'
+                ? s.customReady
+                : s.aiReady;
     if (!keyOk) {
       if (mounted) {
         setState(() {
           msgs.add(_m(
               false,
-              s.aiProvider == 'gonka'
-                  ? s.tLang('gonkanokey', fa)
-                  : s.aiProvider == 'custom'
-                      ? s.tLang('customnokey', fa)
-                      : s.tLang('ainokey', fa)));
+              s.aiProvider == 'cf'
+                  ? s.tLang('cfnokey', fa)
+                  : s.aiProvider == 'gonka'
+                      ? s.tLang('gonkanokey', fa)
+                      : s.aiProvider == 'custom'
+                          ? s.tLang('customnokey', fa)
+                          : s.tLang('ainokey', fa)));
           busy = false;
         });
         _saveChats();
@@ -1778,15 +1788,16 @@ class _AiChatState extends State<AiChatPage> {
   List<({String base, String key, String model})> _fallbackChain(Store s) {
     final chain = <({String base, String key, String model})>[];
     void add(String base, String key, String model) {
-      if (key.isEmpty) return;
+      if (key.isEmpty || base.isEmpty) return;
       if (chain.any((c) => c.base == base && c.model == model)) return;
       chain.add((base: base, key: key, model: model));
     }
 
+    final cf = s.aiProvider == 'cf';
     final gonka = s.aiProvider == 'gonka';
     final custom = s.aiProvider == 'custom';
-    final base = (gonka ? s.gonkaBase : custom ? s.customBase : s.aiBase).replaceAll(RegExp(r'/+$'), '');
-    final key = gonka ? s.gonkaKey : custom ? s.customKey : s.aiKey;
+    final base = (cf ? s.cfBase : gonka ? s.gonkaBase : custom ? s.customBase : s.aiBase).replaceAll(RegExp(r'/+$'), '');
+    final key = cf ? s.cfKey : gonka ? s.gonkaKey : custom ? s.customKey : s.aiKey;
     add(base, key, s.aiChatModel);
     for (final m in _freeModels) {
       add(s.aiBase.replaceAll(RegExp(r'/+$'), ''), s.aiKey, m);
@@ -2365,11 +2376,13 @@ class _AiChatState extends State<AiChatPage> {
     // professional chats — not a chip block eating the page.
     final models = [..._freeModels];
     if (!models.contains(s.aiModelEff)) models.add(s.aiModelEff);
-    final curLabel = s.aiProvider == 'gonka'
-        ? _gonkaLabel(s.gonkaModel)
-        : s.aiProvider == 'custom'
-            ? s.customModel
-            : s.aiModelEff;
+    final curLabel = s.aiProvider == 'cf'
+        ? _cfLabel(s.cfModel)
+        : s.aiProvider == 'gonka'
+            ? _gonkaLabel(s.gonkaModel)
+            : s.aiProvider == 'custom'
+                ? s.customModel
+                : s.aiModelEff;
     return Scaffold(
       key: _scaffoldKey,
       drawer: Drawer(
@@ -2496,11 +2509,13 @@ class _AiChatState extends State<AiChatPage> {
         title: ListenableBuilder(
           listenable: s,
           builder: (_, __) {
-            final ready = s.aiProvider == 'gonka'
-                ? s.gonkaReady
-                : s.aiProvider == 'custom'
-                    ? s.customReady
-                    : s.aiReady;
+            final ready = s.aiProvider == 'cf'
+                ? s.cfReady
+                : s.aiProvider == 'gonka'
+                    ? s.gonkaReady
+                    : s.aiProvider == 'custom'
+                        ? s.customReady
+                        : s.aiReady;
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
@@ -2542,7 +2557,10 @@ class _AiChatState extends State<AiChatPage> {
                 }
                 return;
               }
-              if (m.startsWith('gonka:')) {
+              if (m.startsWith('cf:')) {
+                s.aiProvider = 'cf';
+                s.cfModel = m.substring(3);
+              } else if (m.startsWith('gonka:')) {
                 s.aiProvider = 'gonka';
                 s.gonkaModel = m.substring(6);
               } else {
@@ -2556,6 +2574,16 @@ class _AiChatState extends State<AiChatPage> {
               setState(() {});
             },
             itemBuilder: (_) => [
+              const PopupMenuItem(enabled: false, child: Text('V2rayAG Ai', style: TextStyle(fontSize: 12, color: Colors.grey))),
+              for (final m in _cfModels)
+                PopupMenuItem(
+                  value: 'cf:$m',
+                  child: Row(children: [
+                    if (s.aiProvider == 'cf' && m == s.cfModel) const Icon(Icons.check, size: 16),
+                    if (s.aiProvider == 'cf' && m == s.cfModel) const SizedBox(width: 6),
+                    Text(_cfLabel(m), style: const TextStyle(fontSize: 13)),
+                  ]),
+                ),
               const PopupMenuItem(enabled: false, child: Text('Z.ai', style: TextStyle(fontSize: 12, color: Colors.grey))),
               for (final m in models)
                 PopupMenuItem(
