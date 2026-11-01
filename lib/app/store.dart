@@ -24,7 +24,7 @@ const kBuildNum = String.fromEnvironment('BUILD_NUM', defaultValue: '0');
 // number. Keep in sync with pubspec.yaml's version (the part
 // before the +build number). kBuildNum above stays for the
 // in-app update check's digit comparison only.
-const kAppVersion = '2.0.0';
+const kAppVersion = '10.1.11';
 
 /// Cloudflare Workers AI OpenAI-compatible base URL for an
 /// account ID typed by the user. Empty ID → empty base, so the
@@ -33,6 +33,16 @@ String cfBaseFromAccountId(String accountId) {
   final id = accountId.trim();
   if (id.isEmpty) return '';
   return 'https://api.cloudflare.com/client/v4/accounts/$id/ai/v1';
+}
+
+/// Pure update comparison: the latest release tag's digits
+/// against this build's BUILD_NUM digits. True only when the
+/// release is strictly newer (so a version reset never reads
+/// as an update, and equal/older tags never badge).
+bool updateAvailableFor(String tagName, String buildNum) {
+  final n = int.tryParse(tagName.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+  final cur = int.tryParse(buildNum) ?? 0;
+  return cur > 0 && n > cur;
 }
 
 const _tr = <String, List<String>>{
@@ -443,7 +453,7 @@ const _tr = <String, List<String>>{
   'aiconnectfail': ['Could not connect:', 'اتصال ممکن نشد:'],
   'aiconnectwait': ['Still connecting — check the Home tab for the result.', 'هنوز در حال اتصال است — نتیجه را در تب خانه ببینید.'],
   'aifound': ['Found these servers:', 'این سرورها پیدا شد:'],
-  'ainofound': ['No server found for that country yet. Try Update all in the Providers tab, then ask again.', 'هنوز سروری برای آن کشور پیدا نشد. اول در تب پروایدرها «به‌روزرسانی همه» را بزنید، بعد دوباره بپرسید.'],
+  'ainofound': ['No server for that country in the app\'s current lists (providers and Psiphon). A very rare country may simply not be offered; otherwise try Update all in the Providers tab, then ask again.', 'برای آن کشور در لیست‌های فعلی اپ (پروایدرها و سایفون) سروری نیست. اگر کشور خیلی کمیابی است، ممکن است اصلاً ارائه نشود؛ وگرنه اول در تب پروایدرها «به‌روزرسانی همه» را بزنید، بعد دوباره بپرسید.'],
   'aidisconnected': ['Disconnected.', 'قطع شد.'],
   'aimodeset': ['Mode set to', 'حالت تنظیم شد به'],
   'nologs': ['No logs yet.', 'هنوز لاگی نیست.'],
@@ -675,16 +685,21 @@ class Store extends ChangeNotifier {
   String aiProvider = 'cf';
   String gonkaModel = 'zai-org/GLM-5.3-Flash';
   String gonkaApiKey = '';
-  // v2.0.0: V2rayAG Ai (Cloudflare Workers AI, OpenAI-compatible).
-  // The account ID + API key are typed by the user in
-  // Settings → AI and live only in this app-private file;
-  // nothing about them is baked into the app, so every user
-  // runs on their own Cloudflare account and quota.
+  // v10.1.11: V2rayAG Ai (Cloudflare Workers AI, OpenAI-compatible).
+  // The account ID + API key come baked from the CF_ACCOUNT_ID /
+  // CF_API_KEY repo secrets, so the provider works with no manual
+  // entry; values typed in Settings → AI override them on this
+  // phone only (in-app file, never in chat or code).
   String cfAccountId = '';
   String cfApiKey = '';
   String cfModel = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
   // One-time default-provider migration (see load()): 0 = not run.
   int aiDefaultVersion = 0;
+  // v10.1.11: update badge — latest release tag seen on GitHub
+  // and whether it is newer than this build. Persisted so the
+  // red dot survives restarts until the user actually updates.
+  bool updateAvailable = false;
+  String latestTag = '';
   // User-added providers (Add yours): each carries its own base
   // URL, key, and the real model list fetched at Test & Add time.
   // Stored as maps {name, base, key, models}. The keys live only
@@ -890,6 +905,8 @@ class Store extends ChangeNotifier {
       cfApiKey = j['cfApiKey'] ?? '';
       cfModel = j['cfModel'] ?? '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
       aiDefaultVersion = j['aiDefaultVersion'] ?? 0;
+      updateAvailable = j['updateAvailable'] == true;
+      latestTag = j['latestTag'] ?? '';
       customProviders = (j['customProviders'] as List? ?? [])
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
@@ -903,7 +920,7 @@ class Store extends ChangeNotifier {
       aiRemoteBase = j['aiRemoteBase'] ?? '';
       aiRemoteModel = j['aiRemoteModel'] ?? '';
       aiViaPsiphon = j['aiViaPsiphon'] ?? true;
-      // v2.0.0: the app's default AI provider is now V2rayAG Ai.
+      // v10.1.11: the app's default AI provider is now V2rayAG Ai.
       // One-time: installs on the old default ('zai') move to it;
       // explicit Gonka/custom picks are left alone, and the model
       // pick itself is never force-migrated. The flag makes it
@@ -942,7 +959,7 @@ class Store extends ChangeNotifier {
         'providerLastRefresh': providerLastRefresh, 'srcCache': srcCache, 'providersExpanded': providersExpanded, 'connType': connType, 'appMode': appMode, 'appSet': appSet.toList(),
         'cdnLinks': cdnLinks, 'fragment': fragment, 'fragAll': fragAll, 'fragLen': fragLen, 'fragInt': fragInt, 'testUrl': testUrl, 'autoSortAfterTest': autoSortAfterTest, 'deleteConfirm': deleteConfirm,
         'subFirst': subFirst, 'subLinks': subLinks, 'subRemoved': subRemoved,
-        'useIpv6': useIpv6, 'userHosts': userHosts, 'aiApiKey': aiApiKey, 'aiModel': aiModel, 'aiProvider': aiProvider, 'gonkaModel': gonkaModel, 'gonkaApiKey': gonkaApiKey, 'customProviders': customProviders, 'customName': customName, 'customModel': customModel, 'collapsedProviders': collapsedProviders, 'aiRemoteUrl': aiRemoteUrl, 'aiRemoteKey': aiRemoteKey, 'aiRemoteBase': aiRemoteBase, 'aiRemoteModel': aiRemoteModel, 'aiViaPsiphon': aiViaPsiphon, 'cfAccountId': cfAccountId, 'cfApiKey': cfApiKey, 'cfModel': cfModel, 'aiDefaultVersion': aiDefaultVersion, 'sharedProxyHost': sharedProxyHost, 'sharedProxyPort': sharedProxyPort, 'sharedProxyUser': sharedProxyUser, 'sharedProxyPass': sharedProxyPass, 'sharePort': sharePort,
+        'useIpv6': useIpv6, 'userHosts': userHosts, 'aiApiKey': aiApiKey, 'aiModel': aiModel, 'aiProvider': aiProvider, 'gonkaModel': gonkaModel, 'gonkaApiKey': gonkaApiKey, 'customProviders': customProviders, 'customName': customName, 'customModel': customModel, 'collapsedProviders': collapsedProviders, 'aiRemoteUrl': aiRemoteUrl, 'aiRemoteKey': aiRemoteKey, 'aiRemoteBase': aiRemoteBase, 'aiRemoteModel': aiRemoteModel, 'aiViaPsiphon': aiViaPsiphon, 'cfAccountId': cfAccountId, 'cfApiKey': cfApiKey, 'cfModel': cfModel, 'aiDefaultVersion': aiDefaultVersion, 'updateAvailable': updateAvailable, 'latestTag': latestTag, 'sharedProxyHost': sharedProxyHost, 'sharedProxyPort': sharedProxyPort, 'sharedProxyUser': sharedProxyUser, 'sharedProxyPass': sharedProxyPass, 'sharePort': sharePort,
       }));
     } catch (_) {}
     notifyListeners();
@@ -2147,6 +2164,18 @@ class Store extends ChangeNotifier {
     favorites.clear();
     save();
   }
+  Future<void> testFavorites() async {
+    await testPings(favorites);
+    if (autoSortAfterTest) sortFavorites();
+  }
+  void sortFavorites() {
+    favorites.sort((a, b) => _k(a).compareTo(_k(b)));
+    save();
+  }
+  void deleteInvalidFavorites() {
+    favorites.removeWhere((l) => pings[l] == -1 || trafficFailed.contains(l));
+    save();
+  }
   void connectFavorite(String l) => connectLink(l);
 
   void addSpeedResult(SpeedResult r, String modeLabel) {
@@ -2475,11 +2504,35 @@ class Store extends ChangeNotifier {
   String get gonkaKey => gonkaApiKey.trim().isNotEmpty ? gonkaApiKey.trim() : _bakedGonkaKey();
   bool get gonkaReady => gonkaKey.isNotEmpty;
 
+  static String _bakedCfAccountId() {
+    try {
+      const v = String.fromEnvironment('CF_ACCOUNT_ID_B64', defaultValue: '');
+      if (v.isEmpty) return '';
+      return utf8.decode(base64.decode(base64.normalize(v)));
+    } catch (_) {
+      return '';
+    }
+  }
+
+  static String _bakedCfKey() {
+    try {
+      const v = String.fromEnvironment('CF_API_KEY_B64', defaultValue: '');
+      if (v.isEmpty) return '';
+      return utf8.decode(base64.decode(base64.normalize(v)));
+    } catch (_) {
+      return '';
+    }
+  }
+
   /// V2rayAG Ai (Cloudflare Workers AI, OpenAI-compatible): the
-  /// base URL is built from the user-typed account ID, so the
-  /// provider works on any account without a rebuild.
-  String get cfBase => cfBaseFromAccountId(cfAccountId);
-  String get cfKey => cfApiKey.trim();
+  /// base URL is built from the account ID; in-app values typed
+  /// in Settings → AI override the baked ones on this phone.
+  /// Baked values come from the CF_ACCOUNT_ID / CF_API_KEY repo
+  /// secrets, so the provider works with no manual entry.
+  String get cfBase => cfBaseFromAccountId(
+      cfAccountId.trim().isNotEmpty ? cfAccountId.trim() : _bakedCfAccountId());
+  String get cfKey =>
+      cfApiKey.trim().isNotEmpty ? cfApiKey.trim() : _bakedCfKey();
   bool get cfReady => cfBase.isNotEmpty && cfKey.isNotEmpty;
 
   /// Effective model for the current provider: Gonka models are
@@ -2775,23 +2828,54 @@ class Store extends ChangeNotifier {
 
   void stopScan() => _scanStop = true;
 
-  Future<String> checkUpdate() async {
+  /// Latest release tag + page URL from GitHub, or null when the
+  /// check itself failed (network/API). Never throws.
+  Future<({String tag, String url})?> _fetchLatestRelease() async {
     final c = HttpClient()..connectionTimeout = const Duration(seconds: 6);
     try {
       final r = await (await c.getUrl(Uri.parse('https://api.github.com/repos/alireza-spec/V2rayAGVpn/releases/latest'))).close().timeout(const Duration(seconds: 8));
-      if (r.statusCode != 200) return 'Could not check for updates';
+      if (r.statusCode != 200) return null;
       final j = jsonDecode(await r.transform(utf8.decoder).join());
-      final n = int.tryParse('${j['tag_name']}'.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
-      final cur = int.tryParse(kBuildNum) ?? 0;
-      if (cur > 0 && n > cur) {
-        await Native.openUrl('${j['html_url']}');
-        return 'New version available: ${j['tag_name']}';
-      }
-      return 'You have the latest version';
+      final tag = '${j['tag_name']}';
+      final url = '${j['html_url']}';
+      if (tag.isEmpty || url.isEmpty) return null;
+      return (tag: tag, url: url);
     } catch (_) {
-      return 'Could not check for updates';
+      return null;
     } finally {
       c.close(force: true);
+    }
+  }
+
+  /// Manual check (the drawer's Check for updates row): same
+  /// comparison as before, but it also raises/lowers the red
+  /// badge, and opens the release page when an update exists.
+  Future<String> checkUpdate() async {
+    final rel = await _fetchLatestRelease();
+    if (rel == null) return 'Could not check for updates';
+    if (updateAvailableFor(rel.tag, kBuildNum)) {
+      updateAvailable = true;
+      latestTag = rel.tag;
+      save();
+      await Native.openUrl(rel.url);
+      return 'New version available: ${rel.tag}';
+    }
+    updateAvailable = false;
+    latestTag = '';
+    save();
+    return 'You have the latest version';
+  }
+
+  /// Silent startup check: same comparison, but never opens
+  /// anything and never toasts. Only raises/lowers the badge.
+  Future<void> checkUpdateSilent() async {
+    final rel = await _fetchLatestRelease();
+    if (rel == null) return;
+    final avail = updateAvailableFor(rel.tag, kBuildNum);
+    if (avail != updateAvailable || (avail && latestTag != rel.tag)) {
+      updateAvailable = avail;
+      latestTag = avail ? rel.tag : '';
+      save();
     }
   }
 
