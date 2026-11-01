@@ -499,8 +499,7 @@ class HomePage extends StatelessWidget {
                 _speed(ctx, Icons.arrow_downward_rounded, const Color(0xFF2BD67B), s.t('down'), '${fmtBytes(e.traffic.downSpeed)}/s', fmtBytes(e.traffic.downTotal)),
                 _speed(ctx, Icons.arrow_upward_rounded, const Color(0xFF5AA2FF), s.t('up'), '${fmtBytes(e.traffic.upSpeed)}/s', fmtBytes(e.traffic.upTotal)),
               ]),
-              Stack(children: [
-                Card(
+              Card(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(children: [
@@ -513,27 +512,31 @@ class HomePage extends StatelessWidget {
                   ]),
                 ),
               ),
-                if (s.curLink != null)
-                  Positioned(
-                    top: 0,
-                    right: 0,
-                    child: IconButton(
-                      icon: Icon(s.isFavorite(s.curLink!) ? Icons.star : Icons.star_border, size: 20),
-                      onPressed: () => s.toggleFavorite(s.curLink!),
-                    ),
-                  ),
-              ]),
+              // v10.1.9: three equal buttons under the card; the
+              // favourite star used to sit on the card corner,
+              // overlapping the server row, so it is a button now.
               Row(children: [
-                OutlinedButton.icon(icon: const Icon(Icons.speed), label: Text(s.t('speedtest')), onPressed: () => Navigator.push(ctx, MaterialPageRoute(builder: (_) => SpeedTestPage(s, autoStart: true)))),
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.copy, size: 18),
-                  label: Text(s.t('copyaddr')),
-                  onPressed: e.exitIp == null || e.exitIp!.isEmpty ? null : () => copyText(ctx, s, e.exitIp!),
+                Expanded(
+                  child: OutlinedButton.icon(icon: const Icon(Icons.speed, size: 18), label: FittedBox(fit: BoxFit.scaleDown, child: Text(s.t('speedtest'))), onPressed: () => Navigator.push(ctx, MaterialPageRoute(builder: (_) => SpeedTestPage(s, autoStart: true)))),
                 ),
-                const SizedBox(width: 12),
-                Expanded(child: Text(s.speedResult, style: const TextStyle(fontWeight: FontWeight.w800))),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.copy, size: 18),
+                    label: FittedBox(fit: BoxFit.scaleDown, child: Text(s.t('copyaddr'))),
+                    onPressed: e.exitIp == null || e.exitIp!.isEmpty ? null : () => copyText(ctx, s, e.exitIp!),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    icon: Icon(s.curLink != null && s.isFavorite(s.curLink!) ? Icons.star : Icons.star_border, size: 18),
+                    label: FittedBox(fit: BoxFit.scaleDown, child: Text(s.curLink != null && s.isFavorite(s.curLink!) ? s.t('faved') : s.t('addfav'))),
+                    onPressed: s.curLink == null ? null : () => s.toggleFavorite(s.curLink!),
+                  ),
+                ),
               ]),
+              if (s.speedResult.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 8), child: Text(s.speedResult, style: const TextStyle(fontWeight: FontWeight.w800))),
               if (sub != null && sub.url.isNotEmpty) SubCard(s, sub),
               Center(child: FilledButton.tonal(onPressed: s.disconnectAll, child: Text(s.t('disconnect')))),
             ],
@@ -1665,11 +1668,21 @@ class ServersPage extends StatelessWidget {
         builder: (ctx, _) {
           final list = [...s.myLinks];
           final chosen = list.where(s.sel.contains).toList();
-          Widget btn(IconData ic, String label, VoidCallback f) => OutlinedButton.icon(onPressed: f, icon: Icon(ic, size: 18), label: Text(label));
+          // v10.1.9: two rows of four equal buttons instead of a
+          // wrapping pile, so the toolbar stays compact.
+          Widget btn(IconData ic, String label, VoidCallback f) => Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: f,
+                  icon: Icon(ic, size: 16),
+                  label: FittedBox(fit: BoxFit.scaleDown, child: Text(label, style: const TextStyle(fontSize: 12))),
+                  style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10)),
+                ),
+              );
           return Column(children: [
             Padding(
               padding: const EdgeInsets.all(12),
-              child: Wrap(spacing: 8, runSpacing: 8, children: [
+              child: Column(children: [
+                Row(children: [
                 btn(Icons.content_paste, s.t('paste'), () async {
                   final r = await s.addText(await clip());
                   if (ctx.mounted) toast(ctx, '${s.t('added')}: $r');
@@ -1695,6 +1708,9 @@ class ServersPage extends StatelessWidget {
                 }),
                 btn(Icons.speed, s.testing ? '${s.pingDone}/${s.pingTotal}' : s.t('test'), s.testing ? () {} : s.testMy),
                 btn(Icons.copy, s.t('copy'), () => copyText(ctx, s, (chosen.isEmpty ? list : chosen).join('\n'))),
+                ]),
+                const SizedBox(height: 8),
+                Row(children: [
                 btn(Icons.link, s.t('subtext'), () => copyText(ctx, s, s.subText(chosen.isEmpty ? list : chosen))),
                 btn(Icons.delete_outline, s.t('delete'), () async {
                   if (s.deleteConfirm && !await confirm(ctx, s, s.t('delete'))) return;
@@ -1717,7 +1733,8 @@ class ServersPage extends StatelessWidget {
                     s.save();
                   }
                 }),
-              ]),
+                ]),
+                ]),
             ),
             if (s.testing) LinearProgressIndicator(value: s.pingTotal == 0 ? null : s.pingDone / s.pingTotal),
             Expanded(
@@ -1774,72 +1791,178 @@ class SubsPage extends StatelessWidget {
               FilledButton.icon(
                 icon: const Icon(Icons.add_link),
                 label: Text(s.t('addsub')),
-                onPressed: () async {
-                  final c = await clip();
-                  final r = await ask(ctx, s, s.t('link'), initial: c.startsWith('http') ? c : '');
-                  if (r != null && r.isNotEmpty) {
-                    await s.addText(r);
-                    s.refreshSubs();
-                  }
-                },
+                onPressed: () => _addSubsDialog(ctx),
               ),
               OutlinedButton.icon(icon: const Icon(Icons.refresh), label: Text(s.t('refresh')), onPressed: s.refreshSubs),
+              OutlinedButton.icon(icon: const Icon(Icons.playlist_add), label: Text(s.t('createprofile')), onPressed: () => _createProfileDialog(ctx)),
             ]),
           ),
-          if (s.mySubs.isEmpty) Padding(padding: const EdgeInsets.all(32), child: Text(s.t('empty'), textAlign: TextAlign.center, style: const TextStyle(color: Colors.grey))),
-          for (final u in s.mySubs) _sub(ctx, u),
-          const Divider(height: 32),
-          Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Text(s.t('profiles'), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16))),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: FilledButton.tonalIcon(
-              icon: const Icon(Icons.playlist_add),
-              label: Text(s.t('mkprofile')),
-              onPressed: () async {
-                final chosen = s.myLinks.where(s.sel.contains).toList();
-                if (chosen.isEmpty) {
-                  toast(ctx, s.t('addfirst'));
-                  return;
-                }
-                final n = await ask(ctx, s, s.t('name'));
-                if (n != null && n.isNotEmpty) {
-                  s.profiles[n] = chosen;
-                  s.activeProfile = n;
-                  s.save();
-                }
-              },
-            ),
-          ),
-          for (final n in s.profiles.keys)
-            ListTile(
-              leading: Icon(s.activeProfile == n ? Icons.radio_button_checked : Icons.radio_button_off),
-              title: Text(n),
-              subtitle: Text('${s.profiles[n]!.length}'),
-              onTap: () {
-                s.activeProfile = s.activeProfile == n ? '' : n;
-                s.save();
-              },
-              trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                IconButton(icon: const Icon(Icons.copy), onPressed: () => copyText(ctx, s, s.subText(s.profiles[n]!))),
-                IconButton(
-                  icon: const Icon(Icons.delete_outline),
-                  onPressed: () {
-                    s.profiles.remove(n);
-                    if (s.activeProfile == n) s.activeProfile = '';
-                    s.save();
-                  },
+          // v10.1.9: bulk actions over every subscription, shown
+          // only once at least one sub exists.
+          if (s.mySubs.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              child: Row(children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.speed, size: 16),
+                    label: FittedBox(fit: BoxFit.scaleDown, child: Text(s.t('pingall'), style: const TextStyle(fontSize: 12))),
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10)),
+                    onPressed: () async {
+                      for (final u in List<String>.from(s.mySubs)) {
+                        if ((s.subLinks[u] ?? []).isEmpty) await s.refreshOneSub(u);
+                        await s.testSub(u);
+                      }
+                    },
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.sort, size: 16),
+                    label: FittedBox(fit: BoxFit.scaleDown, child: Text(s.t('sortall'), style: const TextStyle(fontSize: 12))),
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10)),
+                    onPressed: () {
+                      for (final u in s.mySubs) {
+                        s.sortSub(u);
+                      }
+                      toast(ctx, s.t('sortedall'));
+                    },
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.delete_sweep_outlined, size: 16),
+                    label: FittedBox(fit: BoxFit.scaleDown, child: Text(s.t('deleteall'), style: const TextStyle(fontSize: 12))),
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10)),
+                    onPressed: () async {
+                      if (await confirm(ctx, s, s.t('deleteall'))) {
+                        for (final u in List<String>.from(s.mySubs)) {
+                          s.removeSub(u);
+                        }
+                      }
+                    },
+                  ),
                 ),
               ]),
             ),
+          if (s.mySubs.isEmpty) Padding(padding: const EdgeInsets.all(32), child: Text(s.t('empty'), textAlign: TextAlign.center, style: const TextStyle(color: Colors.grey))),
+          for (final u in s.mySubs) _sub(ctx, u),
+          // v10.1.9: the "create profile from selected servers"
+          // flow is removed (it never worked well). Existing
+          // profiles stay usable and deletable; the section
+          // hides entirely when none exist.
+          if (s.profiles.isNotEmpty) ...[
+            const Divider(height: 32),
+            Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Text(s.t('profiles'), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16))),
+            for (final n in s.profiles.keys)
+              ListTile(
+                leading: Icon(s.activeProfile == n ? Icons.radio_button_checked : Icons.radio_button_off),
+                title: Text(n),
+                subtitle: Text('${s.profiles[n]!.length}'),
+                onTap: () {
+                  s.activeProfile = s.activeProfile == n ? '' : n;
+                  s.save();
+                },
+                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                  IconButton(icon: const Icon(Icons.copy), onPressed: () => copyText(ctx, s, s.subText(s.profiles[n]!))),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () {
+                      s.profiles.remove(n);
+                      if (s.activeProfile == n) s.activeProfile = '';
+                      s.save();
+                    },
+                  ),
+                ]),
+              ),
+          ],
         ]),
       );
+
+  /// v10.1.9: Add subscription now takes a whole pasted block:
+  /// every sub URL in it is added (prose, commas, quotes and
+  /// base64 blobs all handled by extractSubUrls) and then all
+  /// subs refresh, so usage bars fill in.
+  Future<void> _addSubsDialog(BuildContext ctx) async {
+    final c = await clip();
+    final ctl = TextEditingController(text: c.contains('http') ? c : '');
+    final text = await showDialog<String>(
+      context: ctx,
+      builder: (_) => AlertDialog(
+        title: Text(s.t('addsub')),
+        content: TextField(controller: ctl, autofocus: true, minLines: 3, maxLines: 8),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(s.t('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctl.text.trim()), child: Text(s.t('ok'))),
+        ],
+      ),
+    );
+    if (text == null || text.isEmpty) return;
+    final r = await s.addText(text);
+    await s.refreshSubs();
+    if (ctx.mounted) toast(ctx, '${s.t('added')}: $r');
+  }
+
+  /// v10.1.9: "Create profile" at the top adds a subscription
+  /// with a custom name: a name field plus a link field. The
+  /// name lands on the first URL (even when several are
+  /// pasted); unnamed subs keep showing their URL host.
+  Future<void> _createProfileDialog(BuildContext ctx) async {
+    final nameCtl = TextEditingController();
+    final urlCtl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: ctx,
+      builder: (_) => AlertDialog(
+        title: Text(s.t('createprofile')),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: nameCtl, autofocus: true, decoration: InputDecoration(labelText: s.t('subname'), border: const OutlineInputBorder())),
+          const SizedBox(height: 12),
+          TextField(controller: urlCtl, decoration: InputDecoration(labelText: s.t('suburl'), border: const OutlineInputBorder())),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(s.t('cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(s.t('ok'))),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final urls = extractSubUrls(urlCtl.text);
+    if (urls.isEmpty) {
+      if (ctx.mounted) toast(ctx, '${s.t('added')}: 0');
+      return;
+    }
+    final name = nameCtl.text.trim();
+    if (name.isNotEmpty) s.subNames[urls[0]] = name;
+    var added = 0;
+    final seen = s.mySubs.toSet();
+    for (final u in urls) {
+      if (seen.add(u)) {
+        s.mySubs.add(u);
+        added++;
+      }
+    }
+    s.save();
+    await s.refreshSubs();
+    if (ctx.mounted) toast(ctx, '${s.t('added')}: $added');
+  }
 
   Widget _sub(BuildContext ctx, String u) {
     final i = s.subInfo[u];
     final links = s.subLinks[u] ?? [];
-    final host = Uri.tryParse(u)?.host ?? u;
+    final host = s.subNames[u] ?? Uri.tryParse(u)?.host ?? u;
     final used = s.activeSub == u && s.single == null && s.mode == 'personal';
-    Widget act(IconData ic, String t, VoidCallback f) => OutlinedButton.icon(onPressed: f, icon: Icon(ic, size: 16), label: Text(t, style: const TextStyle(fontSize: 12)));
+    // v10.1.9: two compact rows instead of a wrapping pile.
+    Widget act(IconData ic, String t, VoidCallback f) => Expanded(
+          child: OutlinedButton.icon(
+            onPressed: f,
+            icon: Icon(ic, size: 16),
+            label: FittedBox(fit: BoxFit.scaleDown, child: Text(t, style: const TextStyle(fontSize: 12))),
+            style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10)),
+          ),
+        );
+    Widget gap() => const SizedBox(width: 6);
     return selectable(
       s,
       ctx,
@@ -1853,25 +1976,38 @@ class SubsPage extends StatelessWidget {
           subtitle: _bars(i, u),
           childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
           children: [
-            Wrap(spacing: 6, runSpacing: 6, children: [
-              act(Icons.play_arrow, s.t('usesub'), () => s.connectSub(u)),
-              act(Icons.speed, s.testing ? '${s.pingDone}/${s.pingTotal}' : s.t('testsub'), s.testing ? () {} : () => s.testSub(u)),
-              act(Icons.copy, s.t('copyall'), () => copyText(ctx, s, links.join('\n'))),
-              act(Icons.cleaning_services_outlined, s.t('deleteinvalid'), () {
-                if (!s.tested(links)) {
-                  toast(ctx, s.t('testfirst'));
-                  return;
-                }
-                s.removeFromSub(u, links.where((l) => s.pings[l] == -1).toList());
-              }),
-              act(Icons.download, s.t('import'), () async {
-                final n = await s.importSub(u);
-                if (ctx.mounted) toast(ctx, '${s.t('added')}: $n');
-              }),
-              act(Icons.refresh, s.t('refresh'), () => s.refreshOneSub(u)),
-              act(Icons.delete_outline, s.t('delsub'), () async {
-                if (await confirm(ctx, s, s.t('delsub'))) s.removeSub(u);
-              }),
+            Column(children: [
+              Row(children: [
+                // v10.1.9: Connect tries this sub's configs in
+                // their current list order (best-ping-first
+                // after Ping all + Sort all), one at a time.
+                act(Icons.play_arrow, s.t('connect'), () => s.connectSubOrdered(u)),
+                gap(),
+                act(Icons.speed, s.testing ? '${s.pingDone}/${s.pingTotal}' : s.t('testsub'), s.testing ? () {} : () => s.testSub(u)),
+                gap(),
+                act(Icons.copy, s.t('copyall'), () => copyText(ctx, s, links.join('\n'))),
+                gap(),
+                act(Icons.cleaning_services_outlined, s.t('deleteinvalid'), () {
+                  if (!s.tested(links)) {
+                    toast(ctx, s.t('testfirst'));
+                    return;
+                  }
+                  s.removeFromSub(u, links.where((l) => s.pings[l] == -1).toList());
+                }),
+              ]),
+              const SizedBox(height: 6),
+              Row(children: [
+                act(Icons.download, s.t('import'), () async {
+                  final n = await s.importSub(u);
+                  if (ctx.mounted) toast(ctx, '${s.t('added')}: $n');
+                }),
+                gap(),
+                act(Icons.refresh, s.t('refresh'), () => s.refreshOneSub(u)),
+                gap(),
+                act(Icons.delete_outline, s.t('delsub'), () async {
+                  if (await confirm(ctx, s, s.t('delsub'))) s.removeSub(u);
+                }),
+              ]),
             ]),
             const SizedBox(height: 8),
             if (links.isEmpty) Padding(padding: const EdgeInsets.all(12), child: Text(s.t('nocfg'), style: const TextStyle(color: Colors.grey))),
