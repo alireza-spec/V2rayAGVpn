@@ -24,7 +24,7 @@ const kBuildNum = String.fromEnvironment('BUILD_NUM', defaultValue: '0');
 // number. Keep in sync with pubspec.yaml's version (the part
 // before the +build number). kBuildNum above stays for the
 // in-app update check's digit comparison only.
-const kAppVersion = '10.1.7';
+const kAppVersion = '10.1.8';
 
 const _tr = <String, List<String>>{
   'home': ['Home', 'خانه'],
@@ -266,6 +266,33 @@ const _tr = <String, List<String>>{
   'cat_net_d': ['DNS speed, domain reachability and config editing.', 'سرعت DNS، دسترسی دامین‌ها و ویرایش کانفیگ.'],
   'cat_codec': ['Base64 encode / decode', 'انکود / دیکود Base64'],
   'cat_codec_d': ['Encode or decode any text, link or config, both directions.', 'هر متن، لینک یا کانفیگی را در هر دو جهت انکود یا دیکود کنید.'],
+  'cat_leak': ['Leak test & kill switch', 'تست نشت و کیل‌سوئیچ'],
+  'cat_leak_d': ['Check what the internet sees with the VPN on, and lock the device to the VPN.', 'بررسی کنید با روشن بودن VPN اینترنت چه چیزی می‌بیند، و دستگاه را به VPN قفل کنید.'],
+  'leak_realip': ['Real IP (direct, no tunnel)', 'آی‌پی واقعی (مستقیم، بدون تونل)'],
+  'leak_exitip': ['Exit IP (through the tunnel)', 'آی‌پی خروجی (از طریق تونل)'],
+  'leak_capture': ['Capture real IP', 'ثبت آی‌پی واقعی'],
+  'leak_refresh': ['Refresh', 'به‌روزرسانی'],
+  'leak_dns': ['DNS servers declared by the connected config', 'سرورهای DNS اعلام‌شده در کانفیگ متصل'],
+  'leak_dns_none': ['None declared: the system resolver is used.', 'چیزی اعلام نشده: از resolver سیستم استفاده می‌شود.'],
+  'leak_ok': ['No IP leak: sites see the exit IP, not your real IP.', 'نشت آی‌پی نیست: سایت‌ها آی‌پی خروجی را می‌بینند، نه آی‌پی واقعی شما.'],
+  'leak_warn': ['LEAK: the exit IP equals your real IP — traffic is not tunneled.', 'نشت: آی‌پی خروجی با آی‌پی واقعی یکی است — ترافیک از تونل نمی‌گذرد.'],
+  'leak_unknown': ['Cannot verify: the exit IP is unknown (geo lookup failed).', 'قابل بررسی نیست: آی‌پی خروجی نامشخص است (تشخیص لوکیشن ناموفق بود).'],
+  'leak_off': ['VPN is off: everything sees your real IP. This is not a leak, it is unprotected.', 'VPN خاموش است: همه آی‌پی واقعی شما را می‌بینند. این نشت نیست، بدون محافظت است.'],
+  'leak_noconfig': ['No config connected.', 'کانفیگی متصل نیست.'],
+  'kill_title': ['Kill switch (Android system setting)', 'کیل‌سوئیچ (تنظیم سیستمی اندروید)'],
+  'kill_d': ['In the VPN settings, turn on "Always-on VPN" and "Block connections without VPN" for V2rayAG. Then, if the tunnel drops, Android blocks all traffic instead of leaking it.', 'در تنظیمات VPN، برای V2rayAG گزینه‌های «VPN همیشه روشن» و «مسدود کردن اتصالات بدون VPN» را فعال کنید. آن‌وقت اگر تونل قطع شود، اندروید همه ترافیک را مسدود می‌کند به‌جای اینکه نشت بدهد.'],
+  'kill_open': ['Open VPN settings', 'باز کردن تنظیمات VPN'],
+  'kill_note': ['Android does not let apps read these toggles, so check them yourself on that screen.', 'اندروید اجازه نمی‌دهد اپ‌ها این گزینه‌ها را بخوانند، پس خودتان روی همان صفحه بررسی کنید.'],
+  'kill_openfail': ['Could not open VPN settings', 'تنظیمات VPN باز نشد'],
+  'cat_backup': ['Backup & restore', 'پشتیبان و بازیابی'],
+  'cat_backup_d': ['Export everything (servers, subscriptions, favorites, settings, chat history) to one file, and restore it after a reinstall.', 'همه‌چیز (سرورها، اشتراک‌ها، علاقه‌مندی‌ها، تنظیمات، تاریخچه چت) را در یک فایل خروجی بگیرید و بعد از نصب دوباره برگردانید.'],
+  'backup_export': ['Export backup', 'خروجی پشتیبان'],
+  'backup_restore': ['Restore backup', 'بازیابی پشتیبان'],
+  'backup_exported': ['Backup exported', 'پشتیبان خروجی گرفته شد'],
+  'backup_restored': ['Backup restored', 'پشتیبان بازیابی شد'],
+  'backup_invalid': ['Not a valid V2rayAG backup', 'پشتیبان معتبر V2rayAG نیست'],
+  'backup_connected': ['Disconnect first, then restore', 'اول قطع کنید، بعد بازیابی کنید'],
+  'backup_confirm': ['Restore this backup? Current servers, settings and chats will be replaced.', 'این پشتیبان بازیابی شود؟ سرورها، تنظیمات و چت‌های فعلی جایگزین می‌شوند.'],
   'codec_input': ['Text', 'متن'],
   'codec_decode': ['Decode', 'دیکود'],
   'codec_encode': ['Encode', 'انکود'],
@@ -412,6 +439,30 @@ const _tr = <String, List<String>>{
   'shareaddr_n': ['The other phone must be on the same Wi-Fi or hotspot as this phone.', 'گوشی دیگر باید به همان وای‌فای یا هات‌اسپاتی وصل باشد که این گوشی به آن وصل است.'],
   'sharehost_h': ['The Share IP shown on the sharer’s Share VPN page (the SOCKS5 address).', 'آیپی اشتراکی که در صفحه Share VPN گوشی اشتراک‌گذارنده نمایش داده می‌شود (همان آدرس SOCKS5).'],
 };
+
+/// v10.1.8: backup envelope. 'store' is the whole v2rayag.json
+/// object, 'chats' the whole aichats.json array (or null when
+/// there is no chat history). Restore validates the envelope
+/// strictly and never overwrites with anything else.
+String buildBackup(Map<String, dynamic> storeJson, Object? chatsJson) =>
+    jsonEncode({'app': 'V2rayAG', 'v': 1, 'store': storeJson, 'chats': chatsJson});
+
+/// v10.1.8: parses a backup document, or null when it is not
+/// a V2rayAG backup (garbage, wrong app/version, store not an
+/// object, chats neither a list nor null).
+Map<String, dynamic>? parseBackup(String text) {
+  try {
+    final d = jsonDecode(text);
+    if (d is! Map<String, dynamic>) return null;
+    if (d['app'] != 'V2rayAG' || d['v'] != 1) return null;
+    if (d['store'] is! Map<String, dynamic>) return null;
+    final chats = d['chats'];
+    if (chats != null && chats is! List) return null;
+    return d;
+  } catch (_) {
+    return null;
+  }
+}
 
 class Store extends ChangeNotifier {
   Store(this.core, this.pool) {
@@ -2654,6 +2705,63 @@ class Store extends ChangeNotifier {
     log('Speed test through the tunnel: $speedResult');
     speedBusy = false;
     notifyListeners();
+  }
+
+  /// v10.1.8: DNS servers declared by the currently connected
+  /// config, or [] when nothing is connected or the config
+  /// declares none. Used by the leak-test page.
+  List<String> connectedDnsServers() {
+    final link = engine.currentLink;
+    if (link == null) return [];
+    if (link.startsWith('json:')) {
+      final cfg = decodeJsonLink(link);
+      return cfg == null ? [] : dnsServersOf(cfg);
+    }
+    final p = core.parse(link);
+    return p == null ? [] : dnsServersOf(p.config);
+  }
+
+  /// v10.1.8: chat history file: same directory rule as the
+  /// Store file (app-private files dir, temp dir fallback).
+  File get _chatsFile {
+    const d = '/data/data/com.v2rayag.v2rayag/files';
+    final dir = Directory(d);
+    return File('${dir.existsSync() ? d : Directory.systemTemp.path}/aichats.json');
+  }
+
+  /// v10.1.8: the backup document: the whole store file plus
+  /// the whole chat history, in a versioned envelope.
+  String backupJson() {
+    Map<String, dynamic> storeJson = {};
+    try {
+      if (!_file.existsSync()) save();
+      storeJson = jsonDecode(_file.readAsStringSync()) as Map<String, dynamic>;
+    } catch (_) {}
+    Object? chatsJson;
+    try {
+      if (_chatsFile.existsSync()) chatsJson = jsonDecode(_chatsFile.readAsStringSync());
+    } catch (_) {}
+    return buildBackup(storeJson, chatsJson);
+  }
+
+  /// v10.1.8: restores a backup document. Refuses while
+  /// connected (restoring under a live tunnel would desync
+  /// the session) and refuses anything that is not a valid
+  /// V2rayAG backup. Returns a _tr key for the toast.
+  Future<String> restoreBackup(String text) async {
+    final b = parseBackup(text);
+    if (b == null) return 'backup_invalid';
+    if (engine.state.phase == Phase.connected || psiphon.state.phase == PsiphonPhase.connected) return 'backup_connected';
+    try {
+      _file.writeAsStringSync(jsonEncode(b['store']));
+      final chats = b['chats'];
+      if (chats is List) _chatsFile.writeAsStringSync(jsonEncode(chats));
+      await load();
+      log('Backup restored');
+      return 'backup_restored';
+    } catch (_) {
+      return 'backup_invalid';
+    }
   }
 
   Future<String> selfTest() async {
