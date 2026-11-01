@@ -64,6 +64,35 @@ const _countries = {
   'it': ['🇮🇹', 'italy', 'ایتالیا'],
   'es': ['🇪🇸', 'spain', 'اسپانیا'],
   'ru': ['🇷🇺', 'russia', 'روسیه'],
+  'au': ['🇦🇺', 'australia', 'استرالیا'],
+  'br': ['🇧🇷', 'brazil', 'برزیل'],
+  'kr': ['🇰🇷', 'korea', 'south korea', 'کره جنوبی'],
+  'za': ['🇿🇦', 'south africa', 'آفریقای جنوبی'],
+  'mx': ['🇲🇽', 'mexico', 'مکزیک'],
+  'at': ['🇦🇹', 'austria', 'اتریش'],
+  'be': ['🇧🇪', 'belgium', 'بلژیک'],
+  'cz': ['🇨🇿', 'czech', 'czechia', 'چک'],
+  'dk': ['🇩🇰', 'denmark', 'دانمارک'],
+  'gr': ['🇬🇷', 'greece', 'یونان'],
+  'hu': ['🇭🇺', 'hungary', 'مجارستان'],
+  'ie': ['🇮🇪', 'ireland', 'ایرلند'],
+  'no': ['🇳🇴', 'norway', 'نروژ'],
+  'pt': ['🇵🇹', 'portugal', 'پرتغال'],
+  'ro': ['🇷🇴', 'romania', 'رومانی'],
+  'il': ['🇮🇱', 'israel', 'اسرائیل'],
+  'sa': ['🇸🇦', 'saudi', 'saudi arabia', 'عربستان'],
+  'th': ['🇹🇭', 'thailand', 'تایلند'],
+  'vn': ['🇻🇳', 'vietnam', 'ویتنام'],
+  'id': ['🇮🇩', 'indonesia', 'اندونزی'],
+  'my': ['🇲🇾', 'malaysia', 'مالزی'],
+  'ph': ['🇵🇭', 'philippines', 'فیلیپین'],
+  'ua': ['🇺🇦', 'ukraine', 'اوکراین'],
+  'ar': ['🇦🇷', 'argentina', 'آرژانتین'],
+  'cl': ['🇨🇱', 'chile', 'شیلی'],
+  'eg': ['🇪🇬', 'egypt', 'مصر'],
+  'nz': ['🇳🇿', 'new zealand', 'نیوزیلند'],
+  'tw': ['🇹🇼', 'taiwan', 'تایوان'],
+  'hk': ['🇭🇰', 'hong kong', 'هنگ‌کنگ'],
 };
 
 /// Finds a country code in the user's message, if any. Flags
@@ -77,8 +106,11 @@ String? countryIn(String q) {
     // was the v1.0.10 bug: "Connect me to a US server" matched
     // NO country (the list only has 'usa'/'america'), so the
     // action connected the fastest server of ANY country.
-    // 'in'/'it' stay excluded: they are everyday English words.
-    if (e.key.length == 2 && !{'in', 'it'}.contains(e.key)) {
+    // Excluded codes are everyday English words ('no', 'at',
+    // 'be', 'my') or ID-like tokens ('in', 'it', 'id', 'eg'):
+    // those countries still match by name and flag, never by
+    // the bare code, so "no, thanks" never means Norway.
+    if (e.key.length == 2 && !{'in', 'it', 'no', 'at', 'be', 'my', 'id', 'eg'}.contains(e.key)) {
       if (RegExp('\\b${e.key}\\b').hasMatch(low)) return e.key;
     }
     for (final token in e.value.skip(1)) {
@@ -432,29 +464,12 @@ String? _localAnswer(Store s, String q, bool fa) {
 /// never trigger an action. Connect/find use measured pings
 /// first and untested provider configs second; find never
 /// connects; connect only runs on an explicit connect request.
-_Action? _actionFor(Store s, String q) {
+/// Strong connect verbs (with کن/شو, or the English word):
+/// these alone prove a command, even inside a question
+/// ("آیا میتونی وصلم کنی؟" is still a command).
+bool hasStrongConnectVerb(String q) {
   final low = q.toLowerCase();
-  final fa = _replyFa(s, q);
-  // Genuine information questions never act, even when they
-  // mention an action word: "وصل کن یعنی چی؟" asks what
-  // connecting means, "چطور وصل کنم؟" asks how, "چرا لیست
-  // سرورها خالیه؟" asks why. But a bare question mark never
-  // blocks an action on its own — polite Persian requests
-  // ("میتونی منو... وصل کنی؟") ARE commands, and the old code
-  // rejected exactly those.
-  final isInfo = q.contains('یعنی چی') ||
-      q.contains('چیست') ||
-      q.contains('چیه') ||
-      q.contains('چطور') ||
-      q.contains('چگونه') ||
-      q.contains('چرا') ||
-      RegExp(r'\b(how|why|what is|what does)\b').hasMatch(low);
-  if (isInfo) return null;
-  // Verbs first, so the combined cases below can use them.
-  // "وصل کنی؟" contains "وصل کن" as a substring, so polite
-  // requests already match these verbs — the old ؟ block was
-  // the only thing stopping them.
-  final wantsConnect = q.contains('وصل کن') ||
+  return q.contains('وصل کن') ||
       q.contains('متصلم کن') ||
       q.contains('وصلش کن') ||
       q.contains('متصل کن') ||
@@ -462,6 +477,55 @@ _Action? _actionFor(Store s, String q) {
       q.contains('متصل شو') ||
       q.contains('کانکت کن') ||
       RegExp(r'\bconnect\b').hasMatch(low);
+}
+
+/// Full connect-command detection: strong verbs plus the
+/// pronoun/short forms users actually type (وصلم، متصلم،
+/// کانکتم، اتصال، وصل). The info guard runs first in
+/// _actionFor, so "درباره اتصالم توضیح بده" never reaches this.
+bool wantsConnectText(String q) =>
+    hasStrongConnectVerb(q) ||
+    q.contains('وصلم') ||
+    q.contains('متصلم') ||
+    q.contains('کانکت') ||
+    q.contains('اتصال') ||
+    q.contains('وصل');
+
+/// Genuine information questions never act, even when they
+/// mention a connection word: "درباره اتصالم توضیح بده" asks
+/// for an explanation, "وضعیت اتصالم چیه؟" asks the status.
+/// A bare question mark never blocks on its own — polite
+/// Persian requests ("میتونی منو... وصل کنی؟") ARE commands.
+bool isInfoQuestion(String q) {
+  final low = q.toLowerCase();
+  return q.contains('یعنی چی') ||
+      q.contains('چیست') ||
+      q.contains('چیه') ||
+      q.contains('چطور') ||
+      q.contains('چگونه') ||
+      q.contains('چرا') ||
+      q.contains('درباره') ||
+      q.contains('توضیح') ||
+      q.contains('وضعیت') ||
+      RegExp(r'\b(how|why|what is|what does|about|explain|status)\b').hasMatch(low);
+}
+
+_Action? _actionFor(Store s, String q) {
+  final low = q.toLowerCase();
+  final fa = _replyFa(s, q);
+  // Genuine information questions never act, even when they
+  // mention an action word (see isInfoQuestion). The
+  // status/quality words (خوبه، هستم، آیا) only block when no
+  // strong command verb is present, so "سرور خوبه رو وصل کن"
+  // still connects while "اتصالم خوبه؟" only asks.
+  final strongConnect = hasStrongConnectVerb(q);
+  final isInfo = isInfoQuestion(q) ||
+      ((q.contains('خوبه') || q.contains('هستم') || q.contains('آیا')) && !strongConnect);
+  if (isInfo) return null;
+  // Verbs first, so the combined cases below can use them.
+  // "وصل کنی؟" contains "وصل کن" as a substring, so polite
+  // requests already match these verbs.
+  final wantsConnect = wantsConnectText(q);
   // "لیست..." is a find request too ("لیست سرورهای آمریکا"):
   // the old code only knew پیدا کن / می‌خوام / find.
   final wantsFind = q.contains('پیدا کن') ||
@@ -530,6 +594,13 @@ _Action? _actionFor(Store s, String q) {
   if (wantsConnect) {
     final bundles = filterChatBundles(s.allBundles(), code, fastStrong);
     if (bundles.isEmpty) {
+      // No provider server for this country, but Psiphon may
+      // still serve it — connect there instead of wrongly
+      // reporting the country as absent. Only when neither has
+      // it does the honest not-found message go out.
+      if (code != null && psiCountries.containsKey(code.toUpperCase())) {
+        return _Action(_ActionKind.psiphon, country: code);
+      }
       return _Action(_ActionKind.find, message: s.tLang('ainofound', fa));
     }
     return _Action(_ActionKind.connect,
@@ -711,7 +782,7 @@ String _snapshot(Store s) {
 String _systemPrompt(Store s, bool fa) => '''
 You are the in-app assistant for V2rayAG, an Android VPN app (Xray core + Psiphon). Answer ONLY about this app and its features, in ${fa ? 'natural, human Persian' : 'English'}. Always write the app name in Latin letters exactly as V2rayAG — never transliterate it into Persian script (never وی‌توری‌ای‌جی or anything like it). Your memory (this conversation), your tasks and your real actions are shared across every provider and model the user picks: switching models never resets what you know or what you can do. Keep answers short and practical; give steps when the user asks how.
 Never invent a server status. Never claim a server works without a real traffic test: a ping only proves the endpoint answers, and "Connected" in this app means real traffic passed, not just a ping. Never ask for, repeat, or output API keys, passwords, subscription URLs, or full config links. If the user attached a log, explain only what they ask about, in plain words, and say what to try next.
-App facts: modes: Smart (providers, then CDN, then Psiphon until one carries real traffic), Automatic (provider pool), CDN Fronting (clean IP + front host from Tools), Personal (own servers/subs), Psiphon (independent emergency transport). Refresh rules: providers refresh once on first install, then every 12h, except Fast (first time, its row arrow, or Update all only; ticking never refreshes). Geo IP/location fills in the background after connect and never blocks Connected. Tools: IP scanner (finds clean IPs), Host/SNI finder (tests which hosts work as a fronting SNI on the user's operator; only hosts that answer Cloudflare pass), DNS latency test, Domain checker, Vless modifier, Share VPN (sharer exposes the tunnel as a LAN SOCKS5 proxy in Proxy mode or Psiphon mode; joiner enters sharer IP + port and connects with no subscription; hotspot clients must set the proxy because Android hotspot bypasses the sharer's VPN by default). IPv6 switch in Settings (default off) adds Xray DNS queryStrategy UseIPv6 to core modes only.
+App facts: modes: Smart (providers, then CDN, then Psiphon until one carries real traffic), Automatic (provider pool), CDN Fronting (clean IP + front host from Tools), Personal (own servers/subs), Psiphon (independent emergency transport). Refresh rules: providers refresh once on first install, then every 12h, except Fast (first time, its row arrow, or Update all only; ticking never refreshes). Geo IP/location fills in the background after connect and never blocks Connected. Tools: IP scanner (finds clean IPs), Host/SNI finder (tests which hosts work as a fronting SNI on the user's operator; only hosts that answer Cloudflare pass), DNS latency test, Domain checker, Vless modifier, Base64 encode/decode, JSON config import (paste a full Xray JSON or an encoded config), Share VPN (sharer exposes the tunnel as a LAN SOCKS5 proxy in Proxy mode or Psiphon mode; joiner enters sharer IP + port and connects with no subscription; hotspot clients must set the proxy because Android hotspot bypasses the sharer's VPN by default). Sections: Home (connect + status), Servers (own configs), Subscriptions (add/refresh, bulk Ping/Sort/Delete all, Create profile, Connect in list order), Favorites (bulk Ping/Sort/Delete all/Delete invalid, tap a favorite to connect and jump Home), Settings (update check with a red badge when a newer release exists, backup export/restore, leak test + VPN kill-switch guide, Quick Settings tile). IPv6 switch in Settings (default off) adds Xray DNS queryStrategy UseIPv6 to core modes only. Photos: when the user sends a photo, read it and answer about what it actually shows; a text-only model says so instead of guessing.
 App snapshot (measured just now): ${_snapshot(s)}
 ''';
 
@@ -742,8 +813,8 @@ const _freeModels = ['glm-4.7-flash', 'glm-4.5-flash'];
 /// why the app default stays on Z.ai's glm-4.5-flash while these
 /// three are switchable choices.
 const _gonkaModels = ['zai-org/GLM-5.3-Flash', 'deepseek-ai/DeepSeek-V4-Flash-0731', 'MiniMaxAI/MiniMax-M2.7'];
-const _cfModels = ['@cf/meta/llama-3.3-70b-instruct-fp8-fast', '@cf/meta/llama-3.1-8b-instruct-fast'];
-String _cfLabel(String m) => m.contains('3.3-70b') ? 'Llama 3.3 70B' : m.contains('3.1-8b') ? 'Llama 3.1 8B' : m;
+const _cfModels = ['@cf/meta/llama-3.3-70b-instruct-fp8-fast', '@cf/meta/llama-3.1-8b-instruct-fast', '@cf/meta/llama-3.2-11b-vision-instruct'];
+String _cfLabel(String m) => m.contains('3.3-70b') ? 'Llama 3.3 70B' : m.contains('3.1-8b') ? 'Llama 3.1 8B' : m.contains('3.2-11b-vision') ? 'Llama 3.2 11B Vision' : m;
 
 String _gonkaLabel(String m) => switch (m) {
       'zai-org/GLM-5.3-Flash' => 'GLM-5.3 Flash',
