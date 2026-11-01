@@ -24,7 +24,7 @@ const kBuildNum = String.fromEnvironment('BUILD_NUM', defaultValue: '0');
 // number. Keep in sync with pubspec.yaml's version (the part
 // before the +build number). kBuildNum above stays for the
 // in-app update check's digit comparison only.
-const kAppVersion = '10.1.6';
+const kAppVersion = '10.1.7';
 
 const _tr = <String, List<String>>{
   'home': ['Home', 'خانه'],
@@ -264,6 +264,15 @@ const _tr = <String, List<String>>{
   'cat_checks_d': ['Quick self-tests and your current IP.', 'تست‌های سریع خودکار و آی‌پی فعلی شما.'],
   'cat_net': ['Network tools', 'ابزارهای شبکه'],
   'cat_net_d': ['DNS speed, domain reachability and config editing.', 'سرعت DNS، دسترسی دامین‌ها و ویرایش کانفیگ.'],
+  'cat_codec': ['Base64 encode / decode', 'انکود / دیکود Base64'],
+  'cat_codec_d': ['Encode or decode any text, link or config, both directions.', 'هر متن، لینک یا کانفیگی را در هر دو جهت انکود یا دیکود کنید.'],
+  'codec_input': ['Text', 'متن'],
+  'codec_decode': ['Decode', 'دیکود'],
+  'codec_encode': ['Encode', 'انکود'],
+  'codec_output': ['Result', 'نتیجه'],
+  'codec_copy': ['Copy result', 'کپی نتیجه'],
+  'codec_clear': ['Clear', 'پاک کردن'],
+  'codec_invalid': ['Not valid base64', 'Base64 معتبر نیست'],
   'hostgrid_d': ['Tap a host to use it as the front host. Green = works on your network, red = no reply.', 'برای استفاده به‌عنوان هاست فرانت روی یک هاست بزنید. سبز یعنی روی شبکه شما کار می‌کند، قرمز یعنی جواب نداد.'],
   'importfile': ['Import .txt file', 'وارد کردن فایل txt'],
   'copyhealthy': ['Copy healthy', 'کپی سالم‌ها'],
@@ -536,7 +545,7 @@ class Store extends ChangeNotifier {
   Set<String> appSet = {};
   List<AppInfo> apps = [];
   String fragLen = '100-200', fragInt = '10-20';
-  String testUrl = 'https://cp.cloudflare.com/generate_204';
+  String testUrl = 'http://cp.cloudflare.com/';
   bool autoSortAfterTest = true, deleteConfirm = false;
   // v46: psiphonVpn is replaced by psiMode above; old saves migrate on load.
   bool psiphonVpnActive = false;
@@ -769,6 +778,12 @@ class Store extends ChangeNotifier {
       appSet = Set<String>.from(j['appSet'] ?? []);
       fragInt = j['fragInt'] ?? fragInt;
       testUrl = j['testUrl'] ?? testUrl;
+      // v10.1.7: installs that saved the old default still carry
+      // it — migrate it to the new default, or the user's phone
+      // would keep testing with the link that marked healthy
+      // configs as failed. A deliberately typed custom URL is
+      // left alone.
+      if (testUrl == 'https://cp.cloudflare.com/generate_204') testUrl = 'http://cp.cloudflare.com/';
       autoSortAfterTest = j['autoSortAfterTest'] ?? true;
       deleteConfirm = j['deleteConfirm'] ?? false;
       // v1.0.7
@@ -1023,7 +1038,7 @@ class Store extends ChangeNotifier {
       } catch (_) {
         continue;
       }
-      for (final u in ['http://cp.cloudflare.com/generate_204', 'http://connectivitycheck.gstatic.com/generate_204']) {
+      for (final u in ['http://cp.cloudflare.com/']) {
         final c = HttpClient()..connectionTimeout = const Duration(seconds: 4);
         c.findProxy = (_) => 'PROXY 127.0.0.1:$p';
         final sw = Stopwatch()..start();
@@ -1772,7 +1787,7 @@ class Store extends ChangeNotifier {
   /// config links are added; surrounding text is ignored. Returns
   /// "added/duplicates/subs" for the result message.
   Future<String> importFileText(String text) async {
-    var added = 0, subs = 0;
+    var subs = 0;
     final subSeen = mySubs.toSet();
     for (final x in text.split(RegExp(r'\s+'))) {
       var clean = x.trim();
@@ -1784,14 +1799,37 @@ class Store extends ChangeNotifier {
     }
     final linkSeen = myLinks.toSet();
     final links = text.length > 20000 ? await compute(extractConfigLinks, text) : extractConfigLinks(text);
+    var linkAdded = 0;
     for (final l in links) {
       if (linkSeen.add(l)) {
         myLinks.add(l);
-        added++;
+        linkAdded++;
       }
     }
+    final jsonAdded = _addJsonLinks(text, linkSeen);
     save();
-    return '$added/${links.length - added}/$subs';
+    return '${linkAdded + jsonAdded}/${links.length - linkAdded}/$subs';
+  }
+
+  /// v10.1.7: shared by paste and file import — adds a pasted
+  /// full-JSON config (plain or base64) and any 'json:' links
+  /// already in the text (e.g. re-importing a previous export).
+  /// Returns how many were added.
+  int _addJsonLinks(String text, Set<String> linkSeen) {
+    var n = 0;
+    final jl = jsonLinkFromText(text);
+    if (jl != null && linkSeen.add(jl)) {
+      myLinks.add(jl);
+      n++;
+    }
+    for (final m in RegExp(r'json:[A-Za-z0-9_\-+/=]+').allMatches(text)) {
+      final t = m.group(0)!;
+      if (decodeJsonLink(t) != null && linkSeen.add(t)) {
+        myLinks.add(t);
+        n++;
+      }
+    }
+    return n;
   }
 
   /// Adds configs and subscription links found in [text]. Returns "configs/subs".
@@ -1805,7 +1843,10 @@ class Store extends ChangeNotifier {
       }
     }
     // Parsing a large pasted body (1000+ lines) off the UI isolate keeps the app responsive.
-    final links = text.length > 20000 ? await compute(extractLinks, text) : extractLinks(text);
+    var links = text.length > 20000 ? await compute(extractLinks, text) : extractLinks(text);
+    // Whole-body base64 is decoded by extractLinks, but links not
+    // at a line start (comma-separated, labelled) are missed there.
+    if (links.isEmpty) links = extractConfigLinks(text);
     final linkSeen = myLinks.toSet();
     for (final l in links) {
       if (linkSeen.add(l)) {
@@ -1813,11 +1854,31 @@ class Store extends ChangeNotifier {
         c++;
       }
     }
+    c += _addJsonLinks(text, linkSeen);
     save();
     return '$c / $s';
   }
 
   String subText(Iterable<String> links) => base64.encode(utf8.encode(links.join('\n')));
+
+  /// v10.1.7: raw TCP reachability of a pasted JSON config's
+  /// server, in ms, or -1 when it cannot be reached. This is
+  /// only stage 1's filter — the verdict still comes from the
+  /// core's real delay test in stage 2.
+  Future<int> _probeJsonHost(String link) async {
+    final cfg = decodeJsonLink(link);
+    if (cfg == null) return -1;
+    final hp = jsonServerHostPort(cfg);
+    if (hp == null) return -1;
+    final sw = Stopwatch()..start();
+    try {
+      final s = await Socket.connect(hp.host, hp.port, timeout: const Duration(seconds: 3));
+      s.destroy();
+      return sw.elapsedMilliseconds;
+    } catch (_) {
+      return -1;
+    }
+  }
 
   Future<void> testPings(List<String> links) async {
     if (testing) return;
@@ -1849,8 +1910,15 @@ class Store extends ChangeNotifier {
     Future<void> worker() async {
       while (i < links.length) {
         final l = links[i++];
-        final p = core.parse(l);
-        probe[l] = p == null ? -1 : (await probeLink(l)).ms;
+        // v10.1.7: a pasted JSON config has no share link to
+        // probe — probe its server host:port directly, so it can
+        // reach stage 2 instead of being stuck at -1 forever.
+        if (l.startsWith('json:')) {
+          probe[l] = await _probeJsonHost(l);
+        } else {
+          final p = core.parse(l);
+          probe[l] = p == null ? -1 : (await probeLink(l)).ms;
+        }
         pingDone++;
         final now = DateTime.now();
         if (pingDone == pingTotal || now.difference(lastUi).inMilliseconds > 180) {
@@ -1886,11 +1954,18 @@ class Store extends ChangeNotifier {
         pingDone++;
         continue;
       }
-      final p = core.parse(l);
       var ms = -1;
-      if (p != null) {
-        final cfg = fragAll ? applyFragment(p.config, length: fragLen, interval: fragInt) : p.config;
-        ms = await core.delay(cfg, testUrl, const Duration(seconds: 10));
+      if (l.startsWith('json:')) {
+        // v10.1.7: a pasted JSON config is tested as-is (no
+        // fragment rewriting: it is a complete user config).
+        final cfg = decodeJsonLink(l);
+        if (cfg != null) ms = await core.delay(cfg, testUrl, const Duration(seconds: 10));
+      } else {
+        final p = core.parse(l);
+        if (p != null) {
+          final cfg = fragAll ? applyFragment(p.config, length: fragLen, interval: fragInt) : p.config;
+          ms = await core.delay(cfg, testUrl, const Duration(seconds: 10));
+        }
       }
       if (ms > 0) {
         pings[l] = ms;
@@ -2587,7 +2662,7 @@ class Store extends ChangeNotifier {
     final p = core.parse(l);
     if (p == null) return 'The core could not read this config';
     final r = await probeLink(l);
-    final d = await core.delay(p.config, 'https://www.gstatic.com/generate_204', const Duration(seconds: 12));
+    final d = await core.delay(p.config, testUrl, const Duration(seconds: 12));
     final m = 'Handshake: ${r.ms} ms, core delay: $d ms${core.lastError.isEmpty ? '' : ', error: ${core.lastError}'}';
     log(m);
     return m;
