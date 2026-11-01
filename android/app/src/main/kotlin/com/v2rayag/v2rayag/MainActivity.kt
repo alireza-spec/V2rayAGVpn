@@ -16,6 +16,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -51,6 +52,24 @@ class MainActivity : FlutterActivity() {
                 "openUrl" -> {
                     try {
                         val i = Intent(Intent.ACTION_VIEW, Uri.parse(call.argument<String>("url") ?: ""))
+                        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(i)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.success(false)
+                    }
+                }
+                "launchAction" -> {
+                    // v10.1.8: the Quick Settings tile's action,
+                    // consumed once so a later launch does not
+                    // repeat it.
+                    val a = intent.getStringExtra("v2rayag_action")
+                    if (a != null) intent.removeExtra("v2rayag_action")
+                    result.success(a)
+                }
+                "openVpnSettings" -> {
+                    try {
+                        val i = Intent(Settings.ACTION_VPN_SETTINGS)
                         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         startActivity(i)
                         result.success(true)
