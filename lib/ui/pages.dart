@@ -187,12 +187,13 @@ class Shell extends StatelessWidget {
                         final busy = !on && (e.phase == Phase.searching || e.phase == Phase.testing || e.phase == Phase.connecting || e.phase == Phase.switching || psi.phase == PsiphonPhase.connecting || s.psiComboBusy);
                     final accent = Theme.of(ctx).colorScheme.primary;
                     final color = on ? const Color(0xFF2BD67B) : (busy ? const Color(0xFF4DA3FF) : Colors.grey);
-                    Widget item(IconData ic, String label, VoidCallback f, {int? tab}) => ListTile(
+                    Widget item(IconData ic, String label, VoidCallback f, {int? tab, Widget? trailing}) => ListTile(
                           dense: true,
                           selected: tab != null && s.tab == tab,
                           selectedTileColor: accent.withOpacity(.14),
                           leading: Icon(ic),
                           title: Text(label),
+                          trailing: trailing,
                           onTap: () {
                             Navigator.pop(ctx);
                             f();
@@ -211,6 +212,7 @@ class Shell extends StatelessWidget {
                             const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                               Text('V2rayAG', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 21)),
                               Text('SECURE · FAST · RELIABLE · PROXY', style: TextStyle(fontSize: 9, letterSpacing: 1)),
+                              Text('Powered by HashtagAlireza', style: TextStyle(fontSize: 9, color: Colors.grey)),
                             ]),
                           ]),
                           const SizedBox(height: 14),
@@ -314,13 +316,19 @@ class Shell extends StatelessWidget {
                           item(Icons.system_update_alt, s.t('update'), () async {
                             final m = await s.checkUpdate();
                             if (ctx.mounted) toast(ctx, m);
-                          }),
+                          }, trailing: s.updateAvailable
+                              ? Row(mainAxisSize: MainAxisSize.min, children: [
+                                  Container(width: 8, height: 8, decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.red)),
+                                  const SizedBox(width: 6),
+                                  Text(s.latestTag, style: const TextStyle(color: Colors.red, fontSize: 12)),
+                                ])
+                              : null),
                           item(Icons.share_outlined, s.t('share'), () => copyText(ctx, s, 'V2rayAG  $kTelegram')),
                           item(Icons.info_outline, s.t('about'), () => showDialog<void>(
                                 context: ctx,
                                 builder: (_) => AlertDialog(
                                   title: const Text('V2rayAG'),
-                                  content: Text('${s.t('dev')}\nTelegram: @V2rayAG\n$kAppVersion'),
+                                  content: Text('${s.t('dev')}\nTelegram: @V2rayAG\nPowered by HashtagAlireza\n$kAppVersion'),
                                   actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text(s.t('ok')))],
                                 ),
                               )),
@@ -680,27 +688,7 @@ String flagOf(String? cc) {
 
 /// v45: Psiphon egress countries offered in settings, in English
 /// alphabetical order. The codes are what Psiphon's EgressRegion takes.
-const psiCountries = {
-  'AT': 'Austria',
-  'BR': 'Brazil',
-  'CA': 'Canada',
-  'CZ': 'Czech Republic',
-  'FR': 'France',
-  'DE': 'Germany',
-  'IN': 'India',
-  'IT': 'Italy',
-  'JP': 'Japan',
-  'NL': 'Netherlands',
-  'PL': 'Poland',
-  'RO': 'Romania',
-  'SG': 'Singapore',
-  'ES': 'Spain',
-  'SE': 'Sweden',
-  'CH': 'Switzerland',
-  'TR': 'Turkey',
-  'GB': 'United Kingdom',
-  'US': 'United States',
-};
+
 
 /// v45: every Psiphon explanation lives here, behind the info button
 /// on the Psiphon page only, so the page itself stays uncluttered.
@@ -1621,38 +1609,45 @@ class FavoritesPage extends StatelessWidget {
           return Scaffold(
             appBar: AppBar(
               title: Text(s.t('favorites')),
-              actions: [
-                if (list.isNotEmpty)
-                  IconButton(
-                    icon: const Icon(Icons.delete_sweep_outlined),
-                    onPressed: () async {
-                      if (await confirm(ctx, s, s.t('favdelall'))) s.clearFavorites();
-                    },
-                  ),
-              ],
             ),
             body: list.isEmpty
                 ? Center(child: Padding(padding: const EdgeInsets.all(32), child: Text(s.t('nofav'), textAlign: TextAlign.center, style: const TextStyle(color: Colors.grey))))
-                : ListView.builder(
-                    itemCount: list.length,
-                    itemBuilder: (_, i) {
-                      final l = list[i];
-                      final inf = linkInfo(l);
-                      return ListTile(
-                        key: ValueKey(l),
-                        dense: true,
-                        title: Text(inf['n']!.isEmpty ? inf['h']! : inf['n']!, maxLines: 1, overflow: TextOverflow.ellipsis),
-                        subtitle: Text('${inf['p']}   ${inf['h']}', maxLines: 1, overflow: TextOverflow.ellipsis),
-                        trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                          pingOrFailed(s, l),
-                          IconButton(icon: const Icon(Icons.star, size: 20), onPressed: () => s.removeFavorite(l)),
-                          IconButton(icon: const Icon(Icons.speed, size: 20), onPressed: () => s.testPings([l])),
-                          IconButton(icon: const Icon(Icons.play_circle_outline), onPressed: () => s.connectFavorite(l)),
-                          IconButton(icon: const Icon(Icons.delete_outline, size: 20), onPressed: () => s.removeFavorite(l)),
-                        ]),
-                      );
-                    },
-                  ),
+                : Column(children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                      child: Row(children: [
+                        Expanded(child: OutlinedButton.icon(icon: const Icon(Icons.speed, size: 18), label: FittedBox(fit: BoxFit.scaleDown, child: Text(s.t('pingall'))), onPressed: () => s.testFavorites())),
+                        const SizedBox(width: 6),
+                        Expanded(child: OutlinedButton.icon(icon: const Icon(Icons.sort, size: 18), label: FittedBox(fit: BoxFit.scaleDown, child: Text(s.t('sortall'))), onPressed: () { s.sortFavorites(); toast(ctx, s.t('sortedall')); })),
+                        const SizedBox(width: 6),
+                        Expanded(child: OutlinedButton.icon(icon: const Icon(Icons.delete_sweep_outlined, size: 18), label: FittedBox(fit: BoxFit.scaleDown, child: Text(s.t('deleteall'))), onPressed: () async { if (await confirm(ctx, s, s.t('favdelall'))) s.clearFavorites(); })),
+                        const SizedBox(width: 6),
+                        Expanded(child: OutlinedButton.icon(icon: const Icon(Icons.cleaning_services_outlined, size: 18), label: FittedBox(fit: BoxFit.scaleDown, child: Text(s.t('deleteinvalid'))), onPressed: () { if (!s.tested(list)) { toast(ctx, s.t('testfirst')); return; } s.deleteInvalidFavorites(); })),
+                      ]),
+                    ),
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: list.length,
+                        itemBuilder: (_, i) {
+                          final l = list[i];
+                          final inf = linkInfo(l);
+                          return ListTile(
+                            key: ValueKey(l),
+                            dense: true,
+                            title: Text(inf['n']!.isEmpty ? inf['h']! : inf['n']!, maxLines: 1, overflow: TextOverflow.ellipsis),
+                            subtitle: Text('${inf['p']}   ${inf['h']}', maxLines: 1, overflow: TextOverflow.ellipsis),
+                            trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                              pingOrFailed(s, l),
+                              IconButton(icon: const Icon(Icons.star, size: 20), onPressed: () => s.removeFavorite(l)),
+                              IconButton(icon: const Icon(Icons.speed, size: 20), onPressed: () => s.testPings([l])),
+                              IconButton(icon: const Icon(Icons.play_circle_outline), onPressed: () { s.connectFavorite(l); s.go(0); Navigator.popUntil(ctx, (r) => r.isFirst); }),
+                              IconButton(icon: const Icon(Icons.delete_outline, size: 20), onPressed: () => s.removeFavorite(l)),
+                            ]),
+                          );
+                        },
+                      ),
+                    ),
+                  ]),
           );
         },
       );
@@ -2696,7 +2691,10 @@ class SettingsPage extends StatelessWidget {
         // Key boxes are gone by design: keys are added through
         // the chat's own Add yours flow (Test & Add), while the
         // AI options below stay. Keys saved earlier keep working
-        // silently — nothing stored was deleted.
+        // silently — nothing stored was deleted. Cloudflare is
+        // the exception: its Add yours flow cannot work (its
+        // endpoint refuses the models list), so its account ID
+        // and key live in the AI card below.
         SwitchListTile(
           title: Text(s.t('aipsi_set')),
           subtitle: Text(s.t('aipsi_set_h')),
@@ -2727,6 +2725,27 @@ class SettingsPage extends StatelessWidget {
             },
           ),
         ),
+        const SizedBox(height: 16),
+        ListTile(title: Text(s.t('aisettings'))),
+        TextFormField(
+          initialValue: s.cfAccountId,
+          decoration: InputDecoration(labelText: s.t('cfaccount'), border: const OutlineInputBorder()),
+          onChanged: (v) {
+            s.cfAccountId = v.trim();
+            s.save();
+          },
+        ),
+        const SizedBox(height: 8),
+        TextFormField(
+          initialValue: s.cfApiKey,
+          obscureText: true,
+          decoration: InputDecoration(labelText: s.t('cfapikey'), border: const OutlineInputBorder()),
+          onChanged: (v) {
+            s.cfApiKey = v.trim();
+            s.save();
+          },
+        ),
+        Padding(padding: const EdgeInsets.only(top: 4), child: Text(s.t('cfhint'), style: const TextStyle(color: Colors.grey, fontSize: 12))),
         const SizedBox(height: 16),
         ListTile(leading: const Icon(Icons.article_outlined), title: Text(s.t('logs')), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => LogsPage(s)))),
         ListTile(leading: const Icon(Icons.backup_outlined), title: Text(s.t('cat_backup')), subtitle: Text(s.t('cat_backup_d'))),
