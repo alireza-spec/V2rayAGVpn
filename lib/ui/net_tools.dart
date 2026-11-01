@@ -18,7 +18,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app/store.dart';
+import '../engine/native.dart';
 import '../engine/pool_engine.dart';
+import '../engine/psiphon_engine.dart';
 
 void _copy(BuildContext c, String text, String done) {
   Clipboard.setData(ClipboardData(text: text));
@@ -653,6 +655,142 @@ class _CodecState extends State<CodecPage> {
           ),
         ],
       ]),
+    );
+  }
+}
+
+// ---------------------------------------------------------------- leak test
+
+/// v10.1.8: leak test + kill-switch guide, in Tools. The real
+/// IP is fetched directly: the app itself bypasses its own
+/// tunnel (it is in the blocked-apps list), so this fetch
+/// always shows the phone's real IP, connected or not. The
+/// exit IP comes from the engine session (proxy geo or
+/// server-IP geo), never from this direct fetch. The verdict
+/// is IP-based only (see leakVerdict); the DNS section only
+/// lists what the connected config declares. The kill switch
+/// itself is Android's system setting — the page opens that
+/// screen, because no app can flip or read those toggles.
+class LeakTestPage extends StatefulWidget {
+  const LeakTestPage(this.s, {super.key});
+  final Store s;
+  @override
+  State<LeakTestPage> createState() => _LeakState();
+}
+
+class _LeakState extends State<LeakTestPage> {
+  String realIp = '';
+  bool fetching = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchRealIp();
+  }
+
+  Future<void> _fetchRealIp() async {
+    if (fetching) return;
+    setState(() => fetching = true);
+    final c = HttpClient();
+    try {
+      final r = await (await c.getUrl(Uri.parse('https://ipwho.is/'))).close().timeout(const Duration(seconds: 8));
+      final j = jsonDecode(await r.transform(utf8.decoder).join());
+      if (mounted) setState(() => realIp = '${j['ip'] ?? ''}');
+    } catch (_) {
+      if (mounted) setState(() => realIp = '');
+    } finally {
+      c.close(force: true);
+      if (mounted) setState(() => fetching = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.s;
+    return Scaffold(
+      appBar: AppBar(title: Text(s.t('cat_leak'))),
+      body: ListenableBuilder(
+        listenable: s,
+        builder: (_, _) {
+          final e = s.engine.state;
+          final engOn = e.phase == Phase.connected;
+          final psiOn = s.psiphon.state.phase == PsiphonPhase.connected;
+          final connected = engOn || psiOn;
+          final exitIp = engOn ? (e.exitIp ?? '') : (psiOn ? (s.psiphon.state.exitIp ?? '') : '');
+          final exitLoc = engOn ? (e.location ?? '') : (psiOn ? (s.psiphon.state.location ?? '') : '');
+          final verdict = leakVerdict(connected: connected, realIp: realIp, exitIp: exitIp);
+          final vColor = verdict == 'leak_ok'
+              ? Colors.green
+              : verdict == 'leak_warn'
+                  ? Colors.redAccent
+                  : verdict == 'leak_off'
+                      ? Colors.grey
+                      : Colors.amber;
+          final dns = s.connectedDnsServers();
+          return ListView(padding: const EdgeInsets.all(16), children: [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    Expanded(child: Text(s.t('leak_realip'), style: const TextStyle(color: Colors.grey))),
+                    if (fetching)
+                      const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                    else
+                      TextButton(onPressed: _fetchRealIp, child: Text(s.t('leak_refresh'))),
+                  ]),
+                  const SizedBox(height: 4),
+                  Text(realIp.isEmpty ? '-' : realIp, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+                  const SizedBox(height: 12),
+                  Text(s.t('leak_exitip'), style: const TextStyle(color: Colors.grey)),
+                  const SizedBox(height: 4),
+                  Text(exitIp.isEmpty ? '-' : exitIp, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+                  if (exitLoc.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 4), child: Text(exitLoc, style: const TextStyle(color: Colors.grey))),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(color: vColor.withOpacity(.15), borderRadius: BorderRadius.circular(8)),
+                    child: Text(s.t(verdict), style: TextStyle(color: vColor, fontWeight: FontWeight.w700)),
+                  ),
+                ]),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(s.t('leak_dns'), style: const TextStyle(fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 8),
+                  Text(connected ? (dns.isEmpty ? s.t('leak_dns_none') : dns.join(', ')) : s.t('leak_noconfig'), style: const TextStyle(color: Colors.grey)),
+                ]),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(s.t('kill_title'), style: const TextStyle(fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 8),
+                  Text(s.t('kill_d')),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    icon: const Icon(Icons.shield_outlined, size: 18),
+                    label: Text(s.t('kill_open')),
+                    onPressed: () async {
+                      final ok = await Native.openVpnSettings();
+                      if (!ok && context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s.t('kill_openfail'))));
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  Text(s.t('kill_note'), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                ]),
+              ),
+            ),
+          ]);
+        },
+      ),
     );
   }
 }
