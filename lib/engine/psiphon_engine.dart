@@ -6,6 +6,31 @@ import 'package:flutter/services.dart';
 
 import 'native.dart';
 
+/// Countries the app offers for Psiphon (dropdown in the UI,
+/// and the chat's fallback when no provider has the requested
+/// country). Keys are uppercase ISO codes.
+const psiCountries = {
+  'AT': 'Austria',
+  'BR': 'Brazil',
+  'CA': 'Canada',
+  'CZ': 'Czech Republic',
+  'FR': 'France',
+  'DE': 'Germany',
+  'IN': 'India',
+  'IT': 'Italy',
+  'JP': 'Japan',
+  'NL': 'Netherlands',
+  'PL': 'Poland',
+  'RO': 'Romania',
+  'SG': 'Singapore',
+  'ES': 'Spain',
+  'SE': 'Sweden',
+  'CH': 'Switzerland',
+  'TR': 'Turkey',
+  'GB': 'United Kingdom',
+  'US': 'United States',
+};
+
 /// Real bridge to ca.psiphon:psiphontunnel (Psiphon-Labs/psiphon-tunnel-core-Android-library)
 /// via MainActivity.kt's PsiphonBridge. This talks to Psiphon's actual, documented API
 /// (PsiphonTunnel.HostService); it does not simulate a connection.
