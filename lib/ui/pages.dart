@@ -50,6 +50,14 @@ void copyText(BuildContext c, Store s, String t) {
 
 Map<String, String> linkInfo(String l) {
   try {
+    // v10.1.7: pasted full-JSON configs show their server, not
+    // the (long) encoded link, in the Servers list.
+    if (l.startsWith('json:')) {
+      final cfg = decodeJsonLink(l);
+      if (cfg == null) return {'p': 'json', 'n': 'JSON config', 'h': ''};
+      final name = jsonConfigName(cfg);
+      return {'p': 'json', 'n': name, 'h': name};
+    }
     if (l.startsWith('vmess://')) {
       final j = jsonDecode(utf8.decode(base64.decode(base64.normalize(l.substring(8))))) as Map<String, dynamic>;
       return {'p': 'vmess', 'n': '${j['ps'] ?? ''}', 'h': '${j['add']}:${j['port']}'};
@@ -1326,28 +1334,26 @@ class _Rings extends CustomPainter {
   final Color color;
   final int state;
 
-  // Project an orbit point: rotate about Y by [yaw] (the slow
-  // camera orbit, see _paintSolar), then about X by (0.30 +
-  // incl), then about Y by 0.15 — the same tilt model as the
-  // demo, with the camera slowly revolving around the system.
-  Offset _project(Offset ctr, double r, double incl, double a, double yaw) {
+  // Project an orbit point: rotate about X by (0.30 + incl),
+  // then about Y by 0.15 — the same tilt model as the demo.
+  // v10.1.7: the slow camera orbit from v10.1.6 is reverted at
+  // the user's request — the connecting display is back to the
+  // v10.1.5 look (fixed angle, no side rotation).
+  Offset _project(Offset ctr, double r, double incl, double a) {
     final x0 = math.cos(a) * r;
     final z0 = math.sin(a) * r;
-    final cy0 = math.cos(yaw), sy0 = math.sin(yaw);
-    final xr = x0 * cy0 + z0 * sy0;
-    final zr = -x0 * sy0 + z0 * cy0;
     final ax = 0.30 + incl;
     final cx = math.cos(ax), sx = math.sin(ax);
-    final y1 = -zr * sx;
-    final z1 = zr * cx;
+    final y1 = -z0 * sx;
+    final z1 = z0 * cx;
     final cy = math.cos(0.15), sy = math.sin(0.15);
-    final x1 = xr * cy + z1 * sy;
-    final z2 = -xr * sy + z1 * cy;
+    final x1 = x0 * cy + z1 * sy;
+    final z2 = -x0 * sy + z1 * cy;
     final s = 1 + z2 * 0.001;
     return Offset(ctr.dx + x1 * s, ctr.dy + y1 * s);
   }
 
-  Offset _solarPoint(Offset ctr, _SolarPlanet p, double a, double yaw) => _project(ctr, p.r, p.incl, a, yaw);
+  Offset _solarPoint(Offset ctr, _SolarPlanet p, double a) => _project(ctr, p.r, p.incl, a);
 
   void _drawSolarPlanet(Canvas canvas, Offset ctr, Offset q, _SolarPlanet p) {
     final r = p.sz;
@@ -1395,13 +1401,8 @@ class _Rings extends CustomPainter {
   /// sits behind the button, so the scene floats on the app.
   void _paintSolar(Canvas canvas, Offset ctr, double cycles) {
     final sec = cycles * 2.4;
-    // v10.1.6: the camera slowly orbits the system — one full
-    // revolution per 60 s — so no planet stays hidden behind the
-    // sun: each one drifts out from behind it as the viewing
-    // angle changes, and the far side of the system comes into
-    // view. Deliberately calm (far slower than any connecting
-    // indicator) so it reads as a camera move, not a spinner.
-    final yaw = sec * 2 * math.pi / 60;
+    // v10.1.7: back to the fixed-angle v10.1.5 display (the
+    // v10.1.6 camera orbit was reverted by user request).
     // Twinkling starfield (deterministic positions, no flicker).
     for (var i = 0; i < 60; i++) {
       final sx = (i * 137.508) % 320;
@@ -1414,7 +1415,7 @@ class _Rings extends CustomPainter {
     for (final p in _solarPlanets) {
       final path = Path();
       for (var k = 0; k <= 72; k++) {
-        final q = _solarPoint(ctr, p, k / 72 * math.pi * 2, yaw);
+        final q = _solarPoint(ctr, p, k / 72 * math.pi * 2);
         if (k == 0) {
           path.moveTo(q.dx, q.dy);
         } else {
@@ -1425,13 +1426,13 @@ class _Rings extends CustomPainter {
     }
     // Asteroid belt between Mars and Jupiter.
     for (var i = 0; i < 60; i++) {
-      final q = _project(ctr, 127 + (i % 5), 0.1, i * 2.39996 + sec * 0.15, yaw);
+      final q = _project(ctr, 127 + (i % 5), 0.1, i * 2.39996 + sec * 0.15);
       canvas.drawCircle(q, 0.8 + (i % 3) * 0.4, Paint()..color = const Color(0xFFCBD5E1).withOpacity(.55));
     }
     // Planets.
     final pos = <Offset>[];
     for (final p in _solarPlanets) {
-      final q = _solarPoint(ctr, p, p.phase + sec * p.sp * 60, yaw);
+      final q = _solarPoint(ctr, p, p.phase + sec * p.sp * 60);
       pos.add(q);
       _drawSolarPlanet(canvas, ctr, q, p);
       if (p.moon) {
@@ -2271,6 +2272,9 @@ class _ToolsState extends State<ToolsPage> {
         const SizedBox(height: 8),
         OutlinedButton.icon(icon: const Icon(Icons.swap_horiz_outlined), label: Text(s.t('vlessmod')), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => VlessModifierPage(s)))),
       ]),
+      _section(context, s, Icons.code_outlined, s.t('cat_codec'), s.t('cat_codec_d'), [
+        OutlinedButton.icon(icon: const Icon(Icons.code_outlined), label: Text(s.t('cat_codec')), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => CodecPage(s)))),
+      ]),
     ]);
   }
 
@@ -2529,9 +2533,9 @@ class SettingsPage extends StatelessWidget {
           initialValue: s.testUrl,
           minLines: 1,
           maxLines: 2,
-          decoration: InputDecoration(labelText: s.t('testurl2'), border: const OutlineInputBorder(), hintText: 'https://cp.cloudflare.com/generate_204'),
+          decoration: InputDecoration(labelText: s.t('testurl2'), border: const OutlineInputBorder(), hintText: 'http://cp.cloudflare.com/'),
           onChanged: (v) {
-            s.testUrl = v.trim().isEmpty ? 'https://cp.cloudflare.com/generate_204' : v.trim();
+            s.testUrl = v.trim().isEmpty ? 'http://cp.cloudflare.com/' : v.trim();
             s.save();
           },
         ),
