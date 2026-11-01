@@ -336,6 +336,39 @@ String? decodeJsonLink(String link) {
   }
 }
 
+/// v10.1.9: every subscription URL in a pasted block, in
+/// order, deduplicated. URLs may sit inside prose, be
+/// comma-separated, quoted or bracketed; a whole-body base64
+/// blob is decoded first (the same loose decoder the config
+/// import uses). Only http(s) URLs count: share links
+/// (vless://...) are configs, not subscriptions. Trailing
+/// sentence punctuation (.,;:!?)]}) is stripped, so a URL
+/// pasted as "https://host/sub, https://host/sub2" yields
+/// both URLs instead of one broken token.
+List<String> extractSubUrls(String text) {
+  final out = <String>[];
+  final seen = <String>{};
+  void scan(String t) {
+    for (final m in RegExp(r'''https?://[^\s<>"'`]+''').allMatches(t)) {
+      // Comma/semicolon-joined URLs ("https://a,https://b")
+      // match as one token: split only where a separator is
+      // directly followed by a new URL, so commas inside a
+      // single URL (query values) survive.
+      for (var u in m.group(0)!.split(RegExp(r'[,;](?=https?://)'))) {
+        while (u.isNotEmpty && '.,;:!?)]}\'"'.contains(u[u.length - 1])) {
+          u = u.substring(0, u.length - 1);
+        }
+        if (u.isNotEmpty && seen.add(u)) out.add(u);
+      }
+    }
+  }
+
+  scan(text);
+  final decoded = decodeBase64Loose(text);
+  if (decoded != null && decoded != text) scan(decoded);
+  return out;
+}
+
 /// v10.1.7: display name of a JSON config: its server, or a
 /// generic label when the server cannot be read.
 String jsonConfigName(String cfg) {
