@@ -24,7 +24,7 @@ const kBuildNum = String.fromEnvironment('BUILD_NUM', defaultValue: '0');
 // number. Keep in sync with pubspec.yaml's version (the part
 // before the +build number). kBuildNum above stays for the
 // in-app update check's digit comparison only.
-const kAppVersion = '10.1.9';
+const kAppVersion = '10.1.10';
 
 const _tr = <String, List<String>>{
   'home': ['Home', 'خانه'],
