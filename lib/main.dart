@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'app/store.dart';
 import 'engine/flutter_vless_core.dart';
+import 'engine/native.dart';
 import 'ui/pages.dart';
 
 /// Build-time pool: --dart-define=POOL_LIST=url1,url2,...  or  --dart-define=POOL_URL=https://...
@@ -36,6 +37,16 @@ Future<void> main() async {
   s.initAllProviders(); // fire-and-forget: populates every provider's config count without blocking startup
   s.log(s.pool.isEmpty ? 'Pool is EMPTY: the POOL_LIST secret was not included in this build' : 'Pool loaded: ${s.pool.length} subscriptions');
   runApp(V2rayAgApp(s));
+  // v10.1.8: Quick Settings tile action, after session
+  // restore so it has the last word. Connect uses the
+  // current mode and cached configs, so it works on a cold
+  // start; disconnect is a no-op when already idle.
+  final tileAction = await Native.launchAction();
+  if (tileAction == 'connect') {
+    s.connect();
+  } else if (tileAction == 'disconnect') {
+    s.disconnectAll();
+  }
 }
 
 class V2rayAgApp extends StatelessWidget {
