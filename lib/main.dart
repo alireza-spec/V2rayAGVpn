@@ -35,6 +35,7 @@ Future<void> main() async {
   await s.load();
   await s.restoreSession();
   s.initAllProviders(); // fire-and-forget: populates every provider's config count without blocking startup
+  s.checkUpdateSilent(); // fire-and-forget: raises the red update badge when GitHub has a newer release
   s.log(s.pool.isEmpty ? 'Pool is EMPTY: the POOL_LIST secret was not included in this build' : 'Pool loaded: ${s.pool.length} subscriptions');
   runApp(V2rayAgApp(s));
   // v10.1.8: Quick Settings tile action, after session
