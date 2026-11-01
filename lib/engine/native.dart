@@ -42,6 +42,29 @@ class Native {
     }
   }
 
+  /// v10.1.8: the Quick Settings tile's action ("connect" or
+  /// "disconnect"), or null when the app was not launched from
+  /// the tile. Consumed once on the native side.
+  static Future<String?> launchAction() async {
+    try {
+      return await _c.invokeMethod<String>('launchAction');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Opens Android's system VPN settings, where Always-on VPN
+  /// and "Block connections without VPN" live. Those toggles
+  /// are system-only: no app can flip or read them, so the
+  /// kill-switch guide can only take the user to the screen.
+  static Future<bool> openVpnSettings() async {
+    try {
+      return await _c.invokeMethod<bool>('openVpnSettings') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   static Future<bool> launch(String pkg) async {
     try {
       return await _c.invokeMethod<bool>('launch', {'pkg': pkg}) ?? false;
