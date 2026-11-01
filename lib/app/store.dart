@@ -24,7 +24,16 @@ const kBuildNum = String.fromEnvironment('BUILD_NUM', defaultValue: '0');
 // number. Keep in sync with pubspec.yaml's version (the part
 // before the +build number). kBuildNum above stays for the
 // in-app update check's digit comparison only.
-const kAppVersion = '10.1.10';
+const kAppVersion = '2.0.0';
+
+/// Cloudflare Workers AI OpenAI-compatible base URL for an
+/// account ID typed by the user. Empty ID → empty base, so the
+/// provider is never called with a malformed URL.
+String cfBaseFromAccountId(String accountId) {
+  final id = accountId.trim();
+  if (id.isEmpty) return '';
+  return 'https://api.cloudflare.com/client/v4/accounts/$id/ai/v1';
+}
 
 const _tr = <String, List<String>>{
   'home': ['Home', 'خانه'],
@@ -360,6 +369,10 @@ const _tr = <String, List<String>>{
   'gonkakey': ['GonkaRouter API key', 'کلید API گونکا راوتر'],
   'gonkakey_h': ['Optional: the GonkaRouter key from gonkarouter.io (or the GONKA_API_KEY repo secret, baked at build). Overrides the baked key on this device.', 'اختیاری: کلید گونکا راوتر از gonkarouter.io (یا سکرت GONKA_API_KEY که در بیلد پخته می‌شود). روی همین گوشی جایگزین کلید پخته‌شده می‌شود.'],
   'gonkanokey': ['No GonkaRouter key set. Add it in Settings → AI, or set the GONKA_API_KEY repo secret and rebuild.', 'کلید گونکا راوتر تنظیم نشده. آن را در Settings → AI وارد کنید، یا سکرت GONKA_API_KEY را بگذارید و دوباره بیلد بگیرید.'],
+  'cfaccount': ['Cloudflare account ID', 'شناسه حساب Cloudflare'],
+  'cfapikey': ['Cloudflare API key', 'کلید API Cloudflare'],
+  'cfhint': ['Used only by the V2rayAG Ai provider, on this phone only. Your key is never sent anywhere except Cloudflare when you ask a question.', 'فقط برای ارائه‌دهنده V2rayAG Ai و فقط روی همین گوشی استفاده می‌شود. کلید شما جز هنگام پرسیدن سؤال به Cloudflare، هیچ‌جا ارسال نمی‌شود.'],
+  'cfnokey': ['V2rayAG Ai is not set up yet. Enter your Cloudflare account ID and API key in Settings → AI.', 'V2rayAG Ai هنوز تنظیم نشده است. شناسه حساب و کلید API خود را در تنظیمات → هوش مصنوعی وارد کنید.'],
   'gonkacredit': ['AI credit exhausted — top up the provider account.', 'اعتبار هوش مصنوعی تمام شده — حساب ارائه‌دهنده را شارژ کنید.'],
   'aionline': ['Online', 'آنلاین'],
   'aioffline': ['Offline — no key', 'آفلاین — بدون کلید'],
@@ -654,12 +667,24 @@ class Store extends ChangeNotifier {
   // (the user's chosen default); existing installs keep their saved
   // pick, which is never force-migrated.
   String aiModel = 'glm-4.5-flash';
-  // AI backend: 'zai' or 'gonka'. GonkaRouter's own picked model
-  // lives separately so switching back never sends a Gonka model
-  // ID to Z.ai (or vice versa).
-  String aiProvider = 'zai';
+  // AI backend: 'cf', 'zai', 'gonka' or 'custom'. Fresh installs
+  // default to 'cf' (V2rayAG Ai); see load() for the one-time
+  // migration of installs on the old default. GonkaRouter's own
+  // picked model lives separately so switching back never sends
+  // a Gonka model ID to Z.ai (or vice versa).
+  String aiProvider = 'cf';
   String gonkaModel = 'zai-org/GLM-5.3-Flash';
   String gonkaApiKey = '';
+  // v2.0.0: V2rayAG Ai (Cloudflare Workers AI, OpenAI-compatible).
+  // The account ID + API key are typed by the user in
+  // Settings → AI and live only in this app-private file;
+  // nothing about them is baked into the app, so every user
+  // runs on their own Cloudflare account and quota.
+  String cfAccountId = '';
+  String cfApiKey = '';
+  String cfModel = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+  // One-time default-provider migration (see load()): 0 = not run.
+  int aiDefaultVersion = 0;
   // User-added providers (Add yours): each carries its own base
   // URL, key, and the real model list fetched at Test & Add time.
   // Stored as maps {name, base, key, models}. The keys live only
@@ -858,9 +883,13 @@ class Store extends ChangeNotifier {
       if (j['userHosts'] is List) userHosts = List<String>.from(j['userHosts']);
       aiApiKey = j['aiApiKey'] ?? '';
       aiModel = j['aiModel'] ?? 'glm-4.5-flash';
-      aiProvider = j['aiProvider'] ?? 'zai';
+      aiProvider = j['aiProvider'] ?? 'cf';
       gonkaModel = j['gonkaModel'] ?? 'zai-org/GLM-5.3-Flash';
       gonkaApiKey = j['gonkaApiKey'] ?? '';
+      cfAccountId = j['cfAccountId'] ?? '';
+      cfApiKey = j['cfApiKey'] ?? '';
+      cfModel = j['cfModel'] ?? '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+      aiDefaultVersion = j['aiDefaultVersion'] ?? 0;
       customProviders = (j['customProviders'] as List? ?? [])
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
@@ -874,6 +903,16 @@ class Store extends ChangeNotifier {
       aiRemoteBase = j['aiRemoteBase'] ?? '';
       aiRemoteModel = j['aiRemoteModel'] ?? '';
       aiViaPsiphon = j['aiViaPsiphon'] ?? true;
+      // v2.0.0: the app's default AI provider is now V2rayAG Ai.
+      // One-time: installs on the old default ('zai') move to it;
+      // explicit Gonka/custom picks are left alone, and the model
+      // pick itself is never force-migrated. The flag makes it
+      // run once; `migrated` persists it via save() below.
+      if (aiDefaultVersion < 1) {
+        if (aiProvider == 'zai') aiProvider = 'cf';
+        aiDefaultVersion = 1;
+        migrated = true;
+      }
       sharedProxyHost = j['sharedProxyHost'] ?? '';
       sharedProxyPort = j['sharedProxyPort'] ?? 18080;
       sharedProxyUser = j['sharedProxyUser'] ?? '';
@@ -903,7 +942,7 @@ class Store extends ChangeNotifier {
         'providerLastRefresh': providerLastRefresh, 'srcCache': srcCache, 'providersExpanded': providersExpanded, 'connType': connType, 'appMode': appMode, 'appSet': appSet.toList(),
         'cdnLinks': cdnLinks, 'fragment': fragment, 'fragAll': fragAll, 'fragLen': fragLen, 'fragInt': fragInt, 'testUrl': testUrl, 'autoSortAfterTest': autoSortAfterTest, 'deleteConfirm': deleteConfirm,
         'subFirst': subFirst, 'subLinks': subLinks, 'subRemoved': subRemoved,
-        'useIpv6': useIpv6, 'userHosts': userHosts, 'aiApiKey': aiApiKey, 'aiModel': aiModel, 'aiProvider': aiProvider, 'gonkaModel': gonkaModel, 'gonkaApiKey': gonkaApiKey, 'customProviders': customProviders, 'customName': customName, 'customModel': customModel, 'collapsedProviders': collapsedProviders, 'aiRemoteUrl': aiRemoteUrl, 'aiRemoteKey': aiRemoteKey, 'aiRemoteBase': aiRemoteBase, 'aiRemoteModel': aiRemoteModel, 'aiViaPsiphon': aiViaPsiphon, 'sharedProxyHost': sharedProxyHost, 'sharedProxyPort': sharedProxyPort, 'sharedProxyUser': sharedProxyUser, 'sharedProxyPass': sharedProxyPass, 'sharePort': sharePort,
+        'useIpv6': useIpv6, 'userHosts': userHosts, 'aiApiKey': aiApiKey, 'aiModel': aiModel, 'aiProvider': aiProvider, 'gonkaModel': gonkaModel, 'gonkaApiKey': gonkaApiKey, 'customProviders': customProviders, 'customName': customName, 'customModel': customModel, 'collapsedProviders': collapsedProviders, 'aiRemoteUrl': aiRemoteUrl, 'aiRemoteKey': aiRemoteKey, 'aiRemoteBase': aiRemoteBase, 'aiRemoteModel': aiRemoteModel, 'aiViaPsiphon': aiViaPsiphon, 'cfAccountId': cfAccountId, 'cfApiKey': cfApiKey, 'cfModel': cfModel, 'aiDefaultVersion': aiDefaultVersion, 'sharedProxyHost': sharedProxyHost, 'sharedProxyPort': sharedProxyPort, 'sharedProxyUser': sharedProxyUser, 'sharedProxyPass': sharedProxyPass, 'sharePort': sharePort,
       }));
     } catch (_) {}
     notifyListeners();
@@ -2436,12 +2475,21 @@ class Store extends ChangeNotifier {
   String get gonkaKey => gonkaApiKey.trim().isNotEmpty ? gonkaApiKey.trim() : _bakedGonkaKey();
   bool get gonkaReady => gonkaKey.isNotEmpty;
 
+  /// V2rayAG Ai (Cloudflare Workers AI, OpenAI-compatible): the
+  /// base URL is built from the user-typed account ID, so the
+  /// provider works on any account without a rebuild.
+  String get cfBase => cfBaseFromAccountId(cfAccountId);
+  String get cfKey => cfApiKey.trim();
+  bool get cfReady => cfBase.isNotEmpty && cfKey.isNotEmpty;
+
   /// Effective model for the current provider: Gonka models are
   /// picked in chat only (the Z.ai remote config never overrides
   /// them); Z.ai keeps remote-then-picked.
-  String get aiChatModel => aiProvider == 'gonka'
-      ? gonkaModel
-      : (aiProvider == 'custom' && customReady ? customModel : aiModelEff);
+  String get aiChatModel => aiProvider == 'cf'
+      ? (cfReady ? cfModel : aiModelEff)
+      : aiProvider == 'gonka'
+          ? gonkaModel
+          : (aiProvider == 'custom' && customReady ? customModel : aiModelEff);
   Map<String, dynamic>? get customProvider {
     if (customName.isEmpty) return null;
     for (final p in customProviders) {
