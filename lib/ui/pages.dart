@@ -2275,6 +2275,9 @@ class _ToolsState extends State<ToolsPage> {
       _section(context, s, Icons.code_outlined, s.t('cat_codec'), s.t('cat_codec_d'), [
         OutlinedButton.icon(icon: const Icon(Icons.code_outlined), label: Text(s.t('cat_codec')), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => CodecPage(s)))),
       ]),
+      _section(context, s, Icons.shield_outlined, s.t('cat_leak'), s.t('cat_leak_d'), [
+        OutlinedButton.icon(icon: const Icon(Icons.shield_outlined), label: Text(s.t('cat_leak')), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => LeakTestPage(s)))),
+      ]),
     ]);
   }
 
@@ -2590,6 +2593,50 @@ class SettingsPage extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         ListTile(leading: const Icon(Icons.article_outlined), title: Text(s.t('logs')), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => LogsPage(s)))),
+        ListTile(leading: const Icon(Icons.backup_outlined), title: Text(s.t('cat_backup')), subtitle: Text(s.t('cat_backup_d'))),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.upload_outlined, size: 18),
+                label: Text(s.t('backup_export')),
+                onPressed: () async {
+                  final uri = await FilePicker.saveFile(dialogTitle: s.t('cat_backup'), fileName: 'v2rayag-backup.json', bytes: Uint8List.fromList(utf8.encode(s.backupJson())));
+                  if (uri != null && context.mounted) toast(context, s.t('backup_exported'));
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.download_outlined, size: 18),
+                label: Text(s.t('backup_restore')),
+                onPressed: () async {
+                  if (!await confirm(context, s, s.t('backup_confirm'))) return;
+                  try {
+                    final file = await FilePicker.pickFile();
+                    if (file == null) return;
+                    String content;
+                    try {
+                      final bytes = await file.readAsBytes();
+                      content = utf8.decode(bytes);
+                    } catch (_) {
+                      final path = file.path;
+                      if (path == null) return;
+                      content = await File(path).readAsString();
+                    }
+                    final r = await s.restoreBackup(content);
+                    if (context.mounted) toast(context, s.t(r));
+                  } catch (_) {
+                    if (context.mounted) toast(context, s.t('backup_invalid'));
+                  }
+                },
+              ),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 16),
         ListTile(leading: const Icon(Icons.send_outlined), title: const Text('Telegram @V2rayAG'), subtitle: const Text(kTelegram), onTap: () => copyText(context, s, kTelegram)),
         ListTile(leading: const Icon(Icons.info_outline), title: Text(s.t('dev'))),
         ListTile(leading: const Icon(Icons.restart_alt, color: Colors.redAccent), title: Text(s.t('reset')), onTap: s.resetAll),
