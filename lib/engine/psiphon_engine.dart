@@ -628,8 +628,7 @@ class PsiphonEngine {
     }
 
     final results = await Future.wait([
-      attempt('http://cp.cloudflare.com/generate_204'),
-      attempt('http://connectivitycheck.gstatic.com/generate_204'),
+      attempt('http://cp.cloudflare.com/'),
     ]);
     for (final p in results) {
       if (p > 0) return p;
