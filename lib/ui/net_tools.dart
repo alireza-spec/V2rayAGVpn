@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app/store.dart';
+import '../engine/pool_engine.dart';
 
 void _copy(BuildContext c, String text, String done) {
   Clipboard.setData(ClipboardData(text: text));
@@ -535,6 +536,121 @@ class _VlessModifierState extends State<VlessModifierPage> {
           ),
           const SizedBox(height: 8),
           SelectableText(outputs.join('\n'), style: const TextStyle(fontSize: 12)),
+        ],
+      ]),
+    );
+  }
+}
+
+// ---------------------------------------------------------------- base64 codec
+
+/// v10.1.7: Base64 encode/decode for any text, link or config,
+/// both directions, in Tools. Decode accepts standard and
+/// URL-safe alphabets and repairs missing padding, so pasted
+/// encoded config blobs decode even when they were wrapped or
+/// copied without padding. The result is selectable and
+/// copyable; nothing is sent anywhere.
+class CodecPage extends StatefulWidget {
+  const CodecPage(this.s, {super.key});
+  final Store s;
+  @override
+  State<CodecPage> createState() => _CodecState();
+}
+
+class _CodecState extends State<CodecPage> {
+  final inCtl = TextEditingController();
+  String out = '';
+  String err = '';
+  bool decode = true;
+
+  @override
+  void dispose() {
+    inCtl.dispose();
+    super.dispose();
+  }
+
+  void _run() {
+    final text = inCtl.text.trim();
+    if (text.isEmpty) {
+      setState(() {
+        out = '';
+        err = '';
+      });
+      return;
+    }
+    if (decode) {
+      final d = decodeBase64Loose(text);
+      setState(() {
+        out = d ?? '';
+        err = d == null ? widget.s.t('codec_invalid') : '';
+      });
+    } else {
+      setState(() {
+        out = base64.encode(utf8.encode(inCtl.text));
+        err = '';
+      });
+    }
+  }
+
+  void _clear() {
+    inCtl.clear();
+    setState(() {
+      out = '';
+      err = '';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.s;
+    return Scaffold(
+      appBar: AppBar(title: Text(s.t('cat_codec'))),
+      body: ListView(padding: const EdgeInsets.all(16), children: [
+        Row(children: [
+          Expanded(
+            child: decode
+                ? FilledButton.icon(icon: const Icon(Icons.lock_open_outlined, size: 18), label: Text(s.t('codec_decode')), onPressed: () => setState(() => decode = true))
+                : OutlinedButton.icon(icon: const Icon(Icons.lock_open_outlined, size: 18), label: Text(s.t('codec_decode')), onPressed: () => setState(() => decode = true)),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: !decode
+                ? FilledButton.icon(icon: const Icon(Icons.lock_outlined, size: 18), label: Text(s.t('codec_encode')), onPressed: () => setState(() => decode = false))
+                : OutlinedButton.icon(icon: const Icon(Icons.lock_outlined, size: 18), label: Text(s.t('codec_encode')), onPressed: () => setState(() => decode = false)),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        TextField(
+          controller: inCtl,
+          minLines: 4,
+          maxLines: 12,
+          decoration: InputDecoration(labelText: s.t('codec_input'), border: const OutlineInputBorder(), alignLabelWithHint: true),
+        ),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(child: FilledButton.icon(icon: const Icon(Icons.swap_horiz_outlined, size: 18), label: Text(decode ? s.t('codec_decode') : s.t('codec_encode')), onPressed: _run)),
+          const SizedBox(width: 8),
+          OutlinedButton.icon(icon: const Icon(Icons.clear, size: 18), label: Text(s.t('codec_clear')), onPressed: _clear),
+        ]),
+        if (err.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 12), child: Text(err, style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w700))),
+        if (out.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          Text(s.t('codec_output'), style: const TextStyle(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(border: Border.all(color: Colors.grey), borderRadius: BorderRadius.circular(8)),
+            child: SelectableText(out, style: const TextStyle(fontSize: 13)),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.copy, size: 18),
+            label: Text(s.t('codec_copy')),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: out));
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s.t('copied'))));
+            },
+          ),
         ],
       ]),
     );
