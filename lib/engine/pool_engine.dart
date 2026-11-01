@@ -344,6 +344,49 @@ String jsonConfigName(String cfg) {
   return '${hp.host}:${hp.port}';
 }
 
+/// v10.1.8: the DNS servers a config JSON declares, as plain
+/// addresses. Servers may be strings ("1.1.1.1") or objects
+/// ({"address": "1.1.1.1", ...}). Empty when the config
+/// declares none (the system resolver is then used) or when
+/// the JSON cannot be read. Informational only: presence of
+/// servers does not by itself prove how queries are routed.
+List<String> dnsServersOf(String configJson) {
+  try {
+    final d = jsonDecode(configJson);
+    if (d is! Map<String, dynamic>) return [];
+    final dns = d['dns'];
+    if (dns is! Map<String, dynamic>) return [];
+    final servers = dns['servers'];
+    if (servers is! List) return [];
+    final out = <String>[];
+    for (final s in servers) {
+      if (s is String && s.isNotEmpty) {
+        out.add(s);
+      } else if (s is Map<String, dynamic>) {
+        final a = '${s['address'] ?? ''}';
+        if (a.isNotEmpty) out.add(a);
+      }
+    }
+    return out;
+  } catch (_) {
+    return [];
+  }
+}
+
+/// v10.1.8: the leak-test verdict key. 'leak_off' when the
+/// VPN is off (unprotected, not a leak), 'leak_ok' when
+/// connected and the exit IP differs from the real IP,
+/// 'leak_warn' when they are equal (traffic is not
+/// tunneled), 'leak_unknown' when either IP is missing —
+/// never call an unverified state a leak or a pass.
+String leakVerdict({required bool connected, String? realIp, String? exitIp}) {
+  if (!connected) return 'leak_off';
+  final r = (realIp ?? '').trim();
+  final e = (exitIp ?? '').trim();
+  if (r.isEmpty || e.isEmpty) return 'leak_unknown';
+  return r == e ? 'leak_warn' : 'leak_ok';
+}
+
 /// v10.1.6: shared geo-body parser for _lookupIp and
 /// _lookupServerGeo. JSON sources carry city/country; plain-IP
 /// sources answer the IP only. A failure status is never an
