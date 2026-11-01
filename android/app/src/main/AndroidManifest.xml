@@ -29,6 +29,18 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- v10.1.8: Quick Settings tile (added by the user from
+             the quick-settings edit panel). -->
+        <service
+            android:name=".VpnTileService"
+            android:icon="@drawable/ic_stat_v2rayag"
+            android:label="V2rayAG"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
