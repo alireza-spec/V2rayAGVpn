@@ -24,7 +24,7 @@ const kBuildNum = String.fromEnvironment('BUILD_NUM', defaultValue: '0');
 // number. Keep in sync with pubspec.yaml's version (the part
 // before the +build number). kBuildNum above stays for the
 // in-app update check's digit comparison only.
-const kAppVersion = '10.1.8';
+const kAppVersion = '10.1.9';
 
 const _tr = <String, List<String>>{
   'home': ['Home', 'خانه'],
@@ -284,6 +284,14 @@ const _tr = <String, List<String>>{
   'kill_open': ['Open VPN settings', 'باز کردن تنظیمات VPN'],
   'kill_note': ['Android does not let apps read these toggles, so check them yourself on that screen.', 'اندروید اجازه نمی‌دهد اپ‌ها این گزینه‌ها را بخوانند، پس خودتان روی همان صفحه بررسی کنید.'],
   'kill_openfail': ['Could not open VPN settings', 'تنظیمات VPN باز نشد'],
+  'pingall': ['Ping all', 'پینگ همه'],
+  'sortall': ['Sort all', 'مرتب‌سازی همه'],
+  'sortedall': ['All subscriptions sorted', 'همه اشتراک‌ها مرتب شدند'],
+  'createprofile': ['Create profile', 'ساخت پروفایل'],
+  'subname': ['Subscription name', 'نام اشتراک'],
+  'suburl': ['Subscription link', 'لینک اشتراک'],
+  'addfav': ['Add to Favourite', 'افزودن به علاقه‌مندی‌ها'],
+  'faved': ['Favourited', 'در علاقه‌مندی‌ها'],
   'cat_backup': ['Backup & restore', 'پشتیبان و بازیابی'],
   'cat_backup_d': ['Export everything (servers, subscriptions, favorites, settings, chat history) to one file, and restore it after a reinstall.', 'همه‌چیز (سرورها، اشتراک‌ها، علاقه‌مندی‌ها، تنظیمات، تاریخچه چت) را در یک فایل خروجی بگیرید و بعد از نصب دوباره برگردانید.'],
   'backup_export': ['Export backup', 'خروجی پشتیبان'],
@@ -463,6 +471,9 @@ Map<String, dynamic>? parseBackup(String text) {
     return null;
   }
 }
+
+/// v10.1.9: outcome of one sequential sub-connect attempt.
+enum _SubAttempt { connected, failed, cancelled }
 
 class Store extends ChangeNotifier {
   Store(this.core, this.pool) {
@@ -680,6 +691,10 @@ class Store extends ChangeNotifier {
   ShareRelay? shareRelay;
   bool get sharing => shareRelay != null;
   List<String> myLinks = [], mySubs = [];
+  // v10.1.9: custom display names for subscriptions, keyed by
+  // URL (set by the top "Create profile" flow; a sub without
+  // an entry shows its URL host, exactly as before).
+  Map<String, String> subNames = {};
   List<String> favorites = [];
   int psiphonAttempts = 0;
   // Links that answered a TCP/TLS ping but failed a real connect attempt
@@ -745,6 +760,7 @@ class Store extends ChangeNotifier {
       accent = j['accent'] ?? accent;
       myLinks = List<String>.from(j['myLinks'] ?? []);
       mySubs = List<String>.from(j['mySubs'] ?? []);
+      subNames = Map<String, String>.from((j['subNames'] as Map<String, dynamic>? ?? {}).map((k, v) => MapEntry(k, '$v')));
       favorites = List<String>.from(j['favorites'] ?? []);
       psiphonAttempts = j['psiphonAttempts'] ?? 0;
       if (j['trafficFailed'] is List) trafficFailed = Set<String>.from(j['trafficFailed']);
@@ -881,7 +897,7 @@ class Store extends ChangeNotifier {
       _file.writeAsStringSync(jsonEncode({
         'lang': lang, 'theme': theme, 'mode': mode, 'cleanIp': cleanIp, 'frontHost': frontHost,
         'bypass': bypass, 'activeProfile': activeProfile, 'accent': accent,
-        'myLinks': myLinks, 'mySubs': mySubs, 'profiles': profiles, 'favorites': favorites, 'psiphonAttempts': psiphonAttempts, 'trafficFailed': trafficFailed.toList(), 'themeDefaultsVersion': themeDefaultsVersion, 'speedHistory': speedHistory,
+        'myLinks': myLinks, 'mySubs': mySubs, 'subNames': subNames, 'profiles': profiles, 'favorites': favorites, 'psiphonAttempts': psiphonAttempts, 'trafficFailed': trafficFailed.toList(), 'themeDefaultsVersion': themeDefaultsVersion, 'speedHistory': speedHistory,
         'session': sessionData, 'psiSession': psiSessionData, 'strict': strict, 'psiCountry': psiCountry, 'psiMode': psiMode, 'psiComboLinks': psiComboLinks, 'psiComboUseApp': psiComboUseApp, 'psiProxyCustom': psiProxyCustom, 'psiProxyIp': psiProxyIp, 'psiProxyPort': psiProxyPort,
         'providerEnabled': providerEnabled, 'providerDefaultsVersion': providerDefaultsVersion, 'providerOrder': providerOrder,
         'providerLastRefresh': providerLastRefresh, 'srcCache': srcCache, 'providersExpanded': providersExpanded, 'connType': connType, 'appMode': appMode, 'appSet': appSet.toList(),
@@ -1840,11 +1856,12 @@ class Store extends ChangeNotifier {
   Future<String> importFileText(String text) async {
     var subs = 0;
     final subSeen = mySubs.toSet();
-    for (final x in text.split(RegExp(r'\s+'))) {
-      var clean = x.trim();
-      while (clean.endsWith('"') || clean.endsWith("'") || clean.endsWith(',') || clean.endsWith(';') || clean.endsWith(']')) clean = clean.substring(0, clean.length - 1);
-      if (RegExp(r'^https?://').hasMatch(clean) && subSeen.add(clean)) {
-        mySubs.add(clean);
+    // v10.1.9: one extractor for every entry point, so a
+    // comma-separated, labelled or prose-mixed block yields
+    // every sub URL instead of one broken token.
+    for (final u in extractSubUrls(text)) {
+      if (subSeen.add(u)) {
+        mySubs.add(u);
         subs++;
       }
     }
@@ -1887,9 +1904,9 @@ class Store extends ChangeNotifier {
   Future<String> addText(String text) async {
     var c = 0, s = 0;
     final subSeen = mySubs.toSet();
-    for (final x in text.split(RegExp(r'\s+'))) {
-      if (RegExp(r'^https?://').hasMatch(x) && subSeen.add(x)) {
-        mySubs.add(x);
+    for (final u in extractSubUrls(text)) {
+      if (subSeen.add(u)) {
+        mySubs.add(u);
         s++;
       }
     }
@@ -2146,6 +2163,7 @@ class Store extends ChangeNotifier {
     subLinks.remove(u);
     subInfo.remove(u);
     subRemoved.remove(u);
+    subNames.remove(u);
     if (activeSub == u) activeSub = null;
     save();
   }
@@ -2200,6 +2218,39 @@ class Store extends ChangeNotifier {
     save();
     go(0);
     connect();
+  }
+
+  /// v10.1.9: the Subs tab's Connect button. Tries the sub's
+  /// configs strictly in their current list order — after
+  /// Ping all + Sort all that is best-ping-first — one at a
+  /// time, stopping at the first that connects. The Personal
+  /// pool flow cannot do this: it shuffles and samples the
+  /// list, so the displayed order would be ignored. A link
+  /// that never settles within 120s is skipped; a user
+  /// disconnect mid-loop aborts the whole loop instead of
+  /// reconnecting to the next link.
+  Future<void> connectSubOrdered(String u) async {
+    final links = [...(subLinks[u] ?? [])];
+    for (final l in links) {
+      if (engine.state.phase == Phase.connected || psiphon.state.phase == PsiphonPhase.connected) return;
+      await connectLink(l);
+      final r = await _waitForSubAttempt();
+      if (r == _SubAttempt.connected) return;
+      if (r == _SubAttempt.cancelled) return;
+    }
+  }
+
+  Future<_SubAttempt> _waitForSubAttempt() async {
+    try {
+      final e = await engine.states
+          .firstWhere((s) => s.phase == Phase.connected || s.phase == Phase.failed || s.phase == Phase.idle)
+          .timeout(const Duration(seconds: 120), onTimeout: () => engine.state);
+      if (e.phase == Phase.connected) return _SubAttempt.connected;
+      if (e.phase == Phase.idle) return _SubAttempt.cancelled;
+      return _SubAttempt.failed;
+    } catch (_) {
+      return _SubAttempt.failed;
+    }
   }
 
   Future<int> importSub(String u) async {
